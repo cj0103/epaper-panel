@@ -1,0 +1,13 @@
+# 构建产物 / 临时预览
+tools/build-panel/
+tools/_preview_*.png
+tools/_*.json
+tools/_*.txt
+__pycache__/
+*.pyc
+
+# bdfconv 官方二进制与字库中间产物（体积大，不入库，见 README 说明）
+tools/u8g2tools/
+tools/_font_backup/
+tools/_bdfprobe/
+*.bdf

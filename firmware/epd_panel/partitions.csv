@@ -1,0 +1,12 @@
+# 自定义分区表 16MB Flash / ESP32-S3
+# 内置字库 2.41MB 加 WiFi HTTP EPD 代码约 1.09MB
+# 官方 app3M_fat9M_16MB 的 3MB app 分区装不下
+# 故扩 app 分区到 12.5MB 文件系统改用 spiffs 分区
+# LittleFS 按 partition label 挂载 content_store 会先试 ffat 再回退 spiffs
+# 代价 只保留单 app 分区 不做 OTA 无线升级 固件走串口烧录
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0xC80000,
+spiffs,   data, spiffs,  0xC90000,0x360000,
+coredump, data, coredump,0xFF0000,0x10000,
