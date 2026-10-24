@@ -4,7 +4,7 @@
 # 用法:
 #   ./tools/shoot_web.sh [设备IP] [输出目录]
 #
-# 默认设备 IP 192.168.1.50，输出到 docs/screenshots/
+# 默认设备 IP 192.168.1.100，输出到 docs/screenshots/
 #
 # 依赖: Edge（Windows 自带）headless 截图，无需 Python。
 # 可选: 若装有 Pillow（python -c "import PIL"），会自动裁掉底部空白。
@@ -17,7 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-IP="${1:-192.168.1.50}"
+IP="${1:-192.168.1.100}"
 OUT="${2:-$ROOT/docs/screenshots}"
 
 EDGE="${EDGE_BIN:-/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe}"

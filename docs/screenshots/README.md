@@ -14,8 +14,8 @@
 ### 复现方式
 
 ```bash
-./tools/shoot_web.sh                # 默认设备 192.168.1.50
-./tools/shoot_web.sh 192.168.1.100  # 指定其它设备 IP
+./tools/shoot_web.sh                # 默认设备 192.168.1.100
+./tools/shoot_web.sh 192.168.1.50   # 指定其它设备 IP
 ```
 
 脚本依赖 Windows 自带的 Edge（headless 模式），无需 Python；若检测到 Pillow 会自动裁掉底部空白。
@@ -35,9 +35,9 @@
 
 ```bash
 # 从设备真实数据生成
-curl -s http://192.168.1.50/api/timetable -o tools/_tt_raw.json
+curl -s http://192.168.1.100/api/timetable -o tools/_tt_raw.json
 python tools/host_render.py --timetable-json tools/_tt_raw.json
 
-curl -s http://192.168.1.50/api/scribe -o tools/_scribe_raw.json
+curl -s http://192.168.1.100/api/scribe -o tools/_scribe_raw.json
 python tools/host_render.py --scribe tools/_scribe_body.txt
 ```
