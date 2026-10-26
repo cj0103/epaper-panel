@@ -12,3 +12,7 @@ tools/_font_backup/
 tools/_bdfprobe/
 *.bdf
 tools/*.log
+
+# 串口抓取脚本与临时产物
+tools/cap.py
+tools/*.bin

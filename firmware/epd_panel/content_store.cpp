@@ -6,6 +6,10 @@
  */
 #include "content_store.h"
 #include <LittleFS.h>
+#include <esp_littlefs.h>
+#include <esp_err.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <ArduinoJson.h>
 
 /* ---------- UTF-8 工具 ---------- */
@@ -57,11 +61,62 @@ static bool writeFileAll(const char* path, const String& content) {
 
 /* ---------- 初始化 ---------- */
 
+/* 挂载 LittleFS。
+ *
+ * 为什么不用 Arduino 的 LittleFS.begin()：
+ *   core 封装里 conf.grow_on_mount = true，挂载时若分区剩余空间大于
+ *   超级块记录的 block_count，littlefs 会走 lfs_fs_grow_() 扩文件系统。
+ *   当分区几何（偏移/大小）与超级块里记录的不一致时（换板子、换分区表后
+ *   残留旧超级块），扩不出空间就直接 assert 死循环：
+ *       assert failed: lfs_fs_grow_ lfs.c:5272
+ *   这里改成：自己用 esp_vfs_littlefs_register 挂载，grow_on_mount=false，
+ *   挂不上就整块擦除 spiffs 分区再挂一次（数据本来就可以从网页重传）。
+ */
+static bool mountLittleFS(const char* label) {
+  esp_vfs_littlefs_conf_t conf = {};
+  conf.base_path = "/littlefs";
+  conf.partition_label = label;
+  conf.partition = NULL;
+  conf.format_if_mount_failed = false;  // 不用 littlefs 自己格式化，改由我们擦分区
+  conf.read_only = false;
+  conf.dont_mount = false;
+  conf.grow_on_mount = false;            // ★ 关键：不要触发 lfs_fs_grow_ 扩卷
+  esp_err_t err = esp_vfs_littlefs_register(&conf);
+  if (err != ESP_OK) {
+    Serial.printf("[存储] 挂载 %s 失败 err=%d，尝试擦除分区后重挂\n", label, (int)err);
+    const esp_partition_t* p = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, label);
+    if (p) {
+      esp_err_t e = esp_partition_erase_range(p, 0, p->size);
+      Serial.printf("[存储] 擦除 %s (0x%06X, %u 字节) 结果=%d\n", label,
+                    (unsigned)p->address, (unsigned)p->size, (int)e);
+      if (e == ESP_OK) {
+        err = esp_vfs_littlefs_register(&conf);
+      }
+    } else {
+      Serial.printf("[存储] 找不到名为 %s 的分区\n", label);
+    }
+  }
+  return err == ESP_OK;
+}
+
 bool storeBegin() {
-  // 兼容不同分区表的数据分区标签（app3M_fat9M 方案为 ffat，默认方案多为 spiffs）
-  if (LittleFS.begin(true, "/fs", 5, "ffat")) return true;
-  if (LittleFS.begin(true, "/fs", 5, "spiffs")) return true;
-  return false;
+  // 先确认分区表里 spiffs 的真实几何，避免挂错盘
+  const esp_partition_t* p = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+  if (p) {
+    Serial.printf("[存储] spiffs 分区 off=0x%06X size=0x%06X (%u 字节)\n",
+                  (unsigned)p->address, (unsigned)p->size, (unsigned)p->size);
+  } else {
+    Serial.println("[存储] 警告：分区表里没有 spiffs 分区");
+  }
+
+  if (!mountLittleFS("spiffs")) {
+    Serial.println("[存储] LittleFS 挂载彻底失败");
+    return false;
+  }
+  Serial.println("[存储] LittleFS 挂载成功");
+  return true;
 }
 
 /* ---------- 模式 ---------- */

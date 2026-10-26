@@ -12,6 +12,10 @@
 #      只有改字号/字符集才需要重跑 tools/gen_fonts_v1.py。
 #   3. 烧录不走 arduino-cli upload：core 3.3.10-cn 的 tools/flasher.exe 缺失
 #      （PyInstaller 打包件），改为直接调 esptool.py 目录下的 esptool.exe。
+#   4. USBMode=hwcdc + CDCOnBoot=cdc 是新板（ESP32-S3 原生 USB / USB Serial-JTAG）
+#      必选项：CDCOnBoot 关闭时 Arduino 的 Serial 走 UART0(GPIO43/44)，而这块板
+#      没有 USB-UART 桥芯片 → app 的 Serial.printf 全部丢失，只能看到 ROM 日志。
+#      旧分立板自带桥芯片，所以那时不用这个参数。
 #
 # 用法：
 #   ./build_panel.sh            # 仅编译
@@ -22,7 +26,7 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/tools"
 
-FQBN="esp32:esp32:esp32s3:FlashSize=16M,FlashMode=qio,PSRAM=opi,PartitionScheme=custom"
+FQBN="esp32:esp32:esp32s3:FlashSize=16M,FlashMode=qio,PSRAM=opi,PartitionScheme=custom,USBMode=hwcdc,CDCOnBoot=cdc,UploadMode=default"
 SKETCH="$ROOT/firmware/epd_panel"
 BUILD="build-panel"
 PORT="${PORT:-COM8}"

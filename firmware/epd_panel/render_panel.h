@@ -10,7 +10,9 @@
 #define PANEL_W 480
 #define PANEL_H 800
 
-extern GxEPD2_3C<GxEPD2_750c_GDEW075Z08, GxEPD2_750c_GDEW075Z08::HEIGHT> display;
+/* 屏驱动：UC8179（盒马红白黑三色 7.5 寸），见 epd_panel.ino 顶部说明。
+ * 注意与 .ino 里的实例化保持一致，改一处必须改两处。 */
+extern GxEPD2_3C<GxEPD2_750c_GDEY075Z08, GxEPD2_750c_GDEY075Z08::HEIGHT> display;
 extern U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 
 void drawTimetable(const PanelTimetable& tt, PanelState& st);   // 内部按天分页并写回总页数

@@ -1,9 +1,14 @@
 /*
  * epd_panel —— 7.5寸墨水屏 内网投屏面板（课程表 / 作文誊抄 / 公告）
  *
- * 硬件：MMK-E075A41(UC8179, 按 GDEW075Z08 驱动) + ESP32-S3 N16R8
- * 接线：SCK=11 MOSI=10 CS=9 DC=8 RST=7 BUSY=6 VCC=3V3
+ * 硬件：MMK-E075A41 / 盒马红白黑三色 7.5 寸屏（主控 UC8179）
+ *       + iDevice 整合驱动板（ESP32-S3 N16R8）
+ * 接线（新板）：SCK=12 MOSI=11 CS=10 DC=13 RST=14 BUSY=15，3V3/GND 板内直连
  * 方向：竖屏（rotation=1，逻辑 480x800）
+ *
+ * ★ 屏驱动选择：GDEY075Z08（gdey3c/，UC8179），不是 GDEW075Z08（epd3c/，GD7965）。
+ *   两者命令集大体相同（0x01/0x04/0x06/0x10/0x13/0x50/0x61/0x90/0x91/0x92），
+ *   但初始化参数、波形表、OTP 处理不同，用错会出现"能通信但不刷新/花屏"。
  *
  * 设计（2026-10-24 与用户确认）：
  *   - 零公网依赖：删除 wttr/一言/60s新闻/NTP（内网时钟不可得，屏上不显示时间）
@@ -38,8 +43,8 @@
 #define EPD_RST   14
 #define EPD_BUSY  15
 
-GxEPD2_3C<GxEPD2_750c_GDEW075Z08, GxEPD2_750c_GDEW075Z08::HEIGHT>
-    display(GxEPD2_750c_GDEW075Z08(/*CS=*/ EPD_CS, /*DC=*/ EPD_DC, /*RST=*/ EPD_RST, /*BUSY=*/ EPD_BUSY));
+GxEPD2_3C<GxEPD2_750c_GDEY075Z08, GxEPD2_750c_GDEY075Z08::HEIGHT>
+    display(GxEPD2_750c_GDEY075Z08(/*CS=*/ EPD_CS, /*DC=*/ EPD_DC, /*RST=*/ EPD_RST, /*BUSY=*/ EPD_BUSY));
 U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 
 /* ---------- 全局状态 ---------- */
@@ -108,9 +113,49 @@ static void renderCurrent() {
  *   GFXfont 与 u8g2 v1 是两种完全不同的格式，v1 字库喂给 GFX 会画出乱码。
  *   现在的自检统一走 u8g2 桥接层，只量宽度不落墨。） */
 void fontProbe();
+void setupFull();
+
+/* 诊断模式开关：
+ *   0 = 完整固件（正常跑）
+ *   1 = 诊断固件：跳过屏/SPI/存储，只跑心跳日志
+ *   2 = 探针固件：只做屏链路自检 + 心跳，不进业务
+ */
+#define DIAG_MODE 0
+
+void epdProbe();
 
 void setup() {
   Serial.begin(115200);
+  // 诊断打点：新版板 USB-Serial/JTAG 枚举慢，bootloader 之后给串口一点缓冲时间
+  delay(300);
+  Serial.println();
+  Serial.printf("[%6lu] [00] setup 开始\n", millis());
+#if DIAG_MODE == 1
+  Serial.printf("[%6lu] [01] 跳过 SPI/display, fontProbe 前\n", millis());
+  fontProbe();
+  Serial.printf("[%6lu] [02] fontProbe 后, storeBegin 前\n", millis());
+  if (!storeBegin()) Serial.println("[警告] storeBegin 返回失败（诊断模式预期）");
+  Serial.printf("[%6lu] [03] storeBegin 返回, 进 loop 前\n", millis());
+  return;
+#elif DIAG_MODE == 2
+  // 探针模式：先自检屏链路，再进心跳
+  SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
+  Serial.printf("[%6lu] [P0] SPI 已启动, 开始屏链路自检\n", millis());
+  epdProbe();
+  Serial.printf("[%6lu] [P1] 探针完成, 进 loop\n", millis());
+  return;
+#else
+  setupFull();
+#endif
+}
+
+void setupFull() {
+  // BUSY 下拉必须在 display.init() 之前：
+  // GxEPD2 初始化后会把 BUSY 设为 INPUT（无上下拉）。
+  // 若屏侧没接 BUSY，悬空脚可能读出随机值 → GxEPD2 判定"一直忙"，
+  // 每次 _waitWhileBusy 都要等满 20~30 秒超时，表现为"卡住不动"。
+  // 这里提前设下拉，保证读到稳定的"空闲"（LOW=忙，HIGH=空闲）。
+  pinMode(EPD_BUSY, INPUT_PULLDOWN);
   SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
   display.init(115200);
   // 竖屏：面板物理 800x480、竖着摆放 → 需要 rotation=1 才能让文字正立且填满整屏。
@@ -119,11 +164,9 @@ void setup() {
   // 缓冲左上角、只占 60% 面积，且整幅画面相对物理方向转了 90°。
   // 若实机出现上下颠倒，把 1 改成 3。
   display.setRotation(1);
-  // 无 BUSY 线（价签类屏常见）时 GPIO15 悬空 → 下拉读出稳定"空闲"，
-  // 避免 GxEPD2 等 BUSY 撞满超时；有 BUSY 线时上拉驱动也能压过下拉。
-  pinMode(EPD_BUSY, INPUT_PULLDOWN);
-  SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
+  Serial.printf("[%6lu] [03] rotation ok, fontProbe 前\n", millis());
   fontProbe();                // u8g2 桥接层字库自检（只量宽度，不落墨）
+  Serial.printf("[%6lu] [04] fontProbe 后, EEPROM 前\n", millis());
   EEPROM.begin(4096);
   u8g2Fonts.begin(display);   // 最后绑定，确保桥接层读到最终旋转状态
 
@@ -150,6 +193,16 @@ void setup() {
 
 /* ---------- loop：只做服务与按需刷屏 ---------- */
 void loop() {
+#if DIAG_MODE
+  // 诊断心跳：每 2 秒打一行，用来确认"固件活着且串口通"
+  static uint32_t lastBeat = 0;
+  if (millis() - lastBeat >= 2000) {
+    lastBeat = millis();
+    Serial.printf("[%6lu] [心跳] 固件运行中, free=%u\n", millis(), ESP.getFreeHeap());
+  }
+  delay(20);
+  return;
+#else
   if (settingMode) {
     dnsServer.processNextRequest();
   }
@@ -165,4 +218,5 @@ void loop() {
     renderCurrent();
   }
   delay(50);
+#endif
 }
