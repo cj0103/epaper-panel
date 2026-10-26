@@ -11,3 +11,4 @@ tools/u8g2tools/
 tools/_font_backup/
 tools/_bdfprobe/
 *.bdf
+tools/*.log
