@@ -26,8 +26,20 @@
 #include "api_panel.h"
 
 /* ---------- 屏与字体 ---------- */
+/* 接线：iDevice 墨水屏驱动板（ESP32-S3 版，S3-WROOM-1 N16R8 模组）。
+ * 该整合板 3.3V/GND 已板内直连，外部只接 6 根信号线，
+ * GPIO 分配取自厂家针脚表 ESP32-S3 行：
+ *   SCK=12  MOSI=11  CS=10  DC=13  RST=14  BUSY=15
+ * （旧的分立驱动板接线为 SCK=11 MOSI=10 CS=9 DC=8 RST=7 BUSY=6，已弃用） */
+#define EPD_SCK   12
+#define EPD_MOSI  11
+#define EPD_CS    10
+#define EPD_DC    13
+#define EPD_RST   14
+#define EPD_BUSY  15
+
 GxEPD2_3C<GxEPD2_750c_GDEW075Z08, GxEPD2_750c_GDEW075Z08::HEIGHT>
-    display(GxEPD2_750c_GDEW075Z08(/*CS=*/ 9, /*DC=*/ 8, /*RST=*/ 7, /*BUSY=*/ 6));
+    display(GxEPD2_750c_GDEW075Z08(/*CS=*/ EPD_CS, /*DC=*/ EPD_DC, /*RST=*/ EPD_RST, /*BUSY=*/ EPD_BUSY));
 U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 
 /* ---------- 全局状态 ---------- */
@@ -99,7 +111,7 @@ void fontProbe();
 
 void setup() {
   Serial.begin(115200);
-  SPI.begin(11, -1, 10, 9);
+  SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
   display.init(115200);
   // 竖屏：面板物理 800x480、竖着摆放 → 需要 rotation=1 才能让文字正立且填满整屏。
   // GxEPD2 的方向由 Adafruit_GFX 的 setRotation 决定（drawPixel 里按 getRotation()
@@ -107,8 +119,10 @@ void setup() {
   // 缓冲左上角、只占 60% 面积，且整幅画面相对物理方向转了 90°。
   // 若实机出现上下颠倒，把 1 改成 3。
   display.setRotation(1);
-  pinMode(6, INPUT);          // BUSY 极性对策：覆盖 GxEPD2 的 INPUT_PULLUP
-  SPI.begin(11, -1, 10, 9);
+  // 无 BUSY 线（价签类屏常见）时 GPIO15 悬空 → 下拉读出稳定"空闲"，
+  // 避免 GxEPD2 等 BUSY 撞满超时；有 BUSY 线时上拉驱动也能压过下拉。
+  pinMode(EPD_BUSY, INPUT_PULLDOWN);
+  SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
   fontProbe();                // u8g2 桥接层字库自检（只量宽度，不落墨）
   EEPROM.begin(4096);
   u8g2Fonts.begin(display);   // 最后绑定，确保桥接层读到最终旋转状态

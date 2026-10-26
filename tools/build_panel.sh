@@ -25,7 +25,7 @@ cd "$ROOT/tools"
 FQBN="esp32:esp32:esp32s3:FlashSize=16M,FlashMode=qio,PSRAM=opi,PartitionScheme=custom"
 SKETCH="$ROOT/firmware/epd_panel"
 BUILD="build-panel"
-PORT="${PORT:-COM6}"
+PORT="${PORT:-COM8}"
 
 ACTION="build"
 if [ "$1" = "upload" ]; then

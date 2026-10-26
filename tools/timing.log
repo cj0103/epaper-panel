@@ -1,0 +1,12 @@
+=== API 往返（纯通信，不含刷屏） ===
+  status RTT=0.068587s
+  status RTT=0.051912s
+  status RTT=0.062801s
+
+=== 局刷切页 next ===
+  next  总耗时=0.265002s
+=== 局刷切页 prev ===
+  prev  总耗时=0.202664s
+=== 整屏全刷 refresh ===
+  refresh 总耗时=0.197015s
+DONE
