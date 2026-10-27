@@ -10,6 +10,7 @@
 #include <esp_err.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
+#include <EEPROM.h>
 #include <ArduinoJson.h>
 
 /* ---------- UTF-8 工具 ---------- */
@@ -63,59 +64,151 @@ static bool writeFileAll(const char* path, const String& content) {
 
 /* 挂载 LittleFS。
  *
- * 为什么不用 Arduino 的 LittleFS.begin()：
- *   core 封装里 conf.grow_on_mount = true，挂载时若分区剩余空间大于
- *   超级块记录的 block_count，littlefs 会走 lfs_fs_grow_() 扩文件系统。
- *   当分区几何（偏移/大小）与超级块里记录的不一致时（换板子、换分区表后
- *   残留旧超级块），扩不出空间就直接 assert 死循环：
- *       assert failed: lfs_fs_grow_ lfs.c:5272
- *   这里改成：自己用 esp_vfs_littlefs_register 挂载，grow_on_mount=false，
- *   挂不上就整块擦除 spiffs 分区再挂一次（数据本来就可以从网页重传）。
+ * 背景（core 3.3.10 LittleFS.cpp 的实际语义）：
+ *   bool LittleFSFS::begin(formatOnFail, basePath, maxOpen, label) {
+ *     if (esp_littlefs_mounted(label)) { return true; }   // ← 提前返回，不绑定挂载点
+ *     conf = { ..., .format_if_mount_failed = false, .grow_on_mount = true };
+ *     err = esp_vfs_littlefs_register(&conf);
+ *     if (err == ESP_FAIL && formatOnFail) {
+ *       if (format()) { err = esp_vfs_littlefs_register(&conf); }   // ← 格式化后重挂
+ *     }
+ *     if (err != ESP_OK) return false;
+ *     _impl->mountpoint(basePath);                          // ← 绑定挂载点在这之后
+ *     return true;
+ *   }
+ *
+ * 两个坑：
+ *  1) 已挂载时提前 return true，**不会**执行 `_impl->mountpoint(basePath)`，
+ *     于是 Arduino 的 LittleFS 对象拿不到挂载点，LittleFS.open() 全失败。
+ *     → 所以不能"自己先挂载再调 begin()"，必须走 core 的标准路径。
+ *  2) conf.grow_on_mount 被 core 写死为 true。挂载时若分区剩余空间大于超级块
+ *     记录的 block_count，littlefs 会走 lfs_fs_grow_() 扩卷；分区几何（偏移/大小）
+ *     变过时扩不出来，直接 assert 死循环：
+ *         assert failed: lfs_fs_grow_ lfs.c:5272
+ *
+ * 解法：把"分区几何指纹"（magic + 偏移 + 大小）存在 EEPROM 0..11 字节。
+ *   - 指纹不匹配（首次上电 / 换过分区表）→ 整块擦除 spiffs 分区，
+ *     挂载从空白开始，没有旧卷可扩，不会触发 assert。
+ *   - 指纹匹配 → 不擦除，保留网页上传的数据。
+ * 若指纹匹配但文件系统本身损坏，core 的 begin(true) 会在挂载失败后
+ * 自动 format() 再挂载，同样能自愈。
  */
-static bool mountLittleFS(const char* label) {
-  esp_vfs_littlefs_conf_t conf = {};
-  conf.base_path = "/littlefs";
-  conf.partition_label = label;
-  conf.partition = NULL;
-  conf.format_if_mount_failed = false;  // 不用 littlefs 自己格式化，改由我们擦分区
-  conf.read_only = false;
-  conf.dont_mount = false;
-  conf.grow_on_mount = false;            // ★ 关键：不要触发 lfs_fs_grow_ 扩卷
-  esp_err_t err = esp_vfs_littlefs_register(&conf);
-  if (err != ESP_OK) {
-    Serial.printf("[存储] 挂载 %s 失败 err=%d，尝试擦除分区后重挂\n", label, (int)err);
-    const esp_partition_t* p = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, label);
-    if (p) {
-      esp_err_t e = esp_partition_erase_range(p, 0, p->size);
-      Serial.printf("[存储] 擦除 %s (0x%06X, %u 字节) 结果=%d\n", label,
-                    (unsigned)p->address, (unsigned)p->size, (int)e);
-      if (e == ESP_OK) {
-        err = esp_vfs_littlefs_register(&conf);
-      }
-    } else {
-      Serial.printf("[存储] 找不到名为 %s 的分区\n", label);
-    }
+#define LFS_BASE_PATH "/fs"
+
+/* 几何指纹存放位置：EEPROM 0..11 字节（WiFi 凭据占用 4000..4095，不冲突） */
+#define GEO_EEPROM_OFF 0
+#define GEO_MAGIC      0x4C465347UL /* 'LFSG' */
+
+/* EEPROM 用于存几何指纹；确保已经 begin 过（length() 返回 0 表示未初始化） */
+static void ensureEepromReady() {
+  if (EEPROM.length() < 4096) EEPROM.begin(4096);
+}
+
+static uint32_t geoReadU32(int addr) {
+  return (uint32_t)EEPROM.read(addr) |
+         ((uint32_t)EEPROM.read(addr + 1) << 8) |
+         ((uint32_t)EEPROM.read(addr + 2) << 16) |
+         ((uint32_t)EEPROM.read(addr + 3) << 24);
+}
+
+static void geoWriteU32(int addr, uint32_t v) {
+  EEPROM.write(addr, (uint8_t)(v & 0xFF));
+  EEPROM.write(addr + 1, (uint8_t)((v >> 8) & 0xFF));
+  EEPROM.write(addr + 2, (uint8_t)((v >> 16) & 0xFF));
+  EEPROM.write(addr + 3, (uint8_t)((v >> 24) & 0xFF));
+}
+
+static const esp_partition_t* findSpiffsPartition() {
+  return esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+}
+
+static bool eraseSpiffsPartition() {
+  const esp_partition_t* p = findSpiffsPartition();
+  if (!p) {
+    Serial.println("[存储] 找不到 spiffs 分区");
+    return false;
   }
-  return err == ESP_OK;
+  Serial.printf("[存储] 擦除 spiffs 分区 (0x%06X, %u 字节) …\n",
+                (unsigned)p->address, (unsigned)p->size);
+  // ★ 擦 3.4MB 要几十秒，期间 flash cache 被关，idle 任务跑不起来 →
+  //   任务看门狗(默认5s)会直接把芯片复位，擦到一半就重启。
+  //   core 自己的 LittleFSFS::format() 也是这么处理的：擦之前先关 WDT。
+  bool wdt_active = disableCore0WDT();
+  esp_err_t e = esp_partition_erase_range(p, 0, p->size);
+  if (wdt_active) enableCore0WDT();
+  Serial.printf("[存储] 擦除结果=%d\n", (int)e);
+  return e == ESP_OK;
 }
 
 bool storeBegin() {
-  // 先确认分区表里 spiffs 的真实几何，避免挂错盘
-  const esp_partition_t* p = esp_partition_find_first(
-      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
-  if (p) {
-    Serial.printf("[存储] spiffs 分区 off=0x%06X size=0x%06X (%u 字节)\n",
-                  (unsigned)p->address, (unsigned)p->size, (unsigned)p->size);
-  } else {
+  ensureEepromReady();
+  const esp_partition_t* p = findSpiffsPartition();
+  if (!p) {
     Serial.println("[存储] 警告：分区表里没有 spiffs 分区");
-  }
-
-  if (!mountLittleFS("spiffs")) {
-    Serial.println("[存储] LittleFS 挂载彻底失败");
     return false;
   }
-  Serial.println("[存储] LittleFS 挂载成功");
+  Serial.printf("[存储] spiffs 分区 off=0x%06X size=0x%06X (%u 字节)\n",
+                (unsigned)p->address, (unsigned)p->size, (unsigned)p->size);
+
+  // 几何指纹是否与当前分区一致
+  uint32_t fpMagic = geoReadU32(GEO_EEPROM_OFF);
+  uint32_t fpAddr  = geoReadU32(GEO_EEPROM_OFF + 4);
+  uint32_t fpSize  = geoReadU32(GEO_EEPROM_OFF + 8);
+  bool geoOk = (fpMagic == GEO_MAGIC) &&
+               (fpAddr == (uint32_t)p->address) &&
+               (fpSize == (uint32_t)p->size);
+  Serial.printf("[存储] 几何指纹 magic=0x%08X addr=0x%08X size=0x%08X\n",
+                (unsigned)fpMagic, (unsigned)fpAddr, (unsigned)fpSize);
+
+  if (!geoOk) {
+    // 首次上电，或分区表改过 → flash 上可能残留旧超级块，
+    // core 的 grow_on_mount=true 会走进 lfs_fs_grow_() 断言死循环。
+    // 只能整块擦除，让挂载从空白分区开始。数据本来就能从网页重传。
+    Serial.println("[存储] 分区几何指纹不匹配 → 整块擦除（规避 grow_on_mount 断言）");
+    if (!eraseSpiffsPartition()) {
+      Serial.println("[存储] 擦除分区失败，仍尝试挂载");
+    }
+  } else {
+    Serial.println("[存储] 分区几何指纹匹配 → 保留已有数据，不擦除");
+  }
+
+  // ★ 必须走 core 的标准路径：只有它成功到最后一行，才会绑定 mountpoint，
+  //   LittleFS.open() 才能工作。挂载失败时 core 会自动 format() 再挂载。
+  if (!LittleFS.begin(true, LFS_BASE_PATH, 5, "spiffs")) {
+    Serial.println("[存储] LittleFS 挂载失败");
+    return false;
+  }
+  Serial.printf("[存储] LittleFS 挂载成功，挂载点 = %s\n", LittleFS.mountpoint());
+
+  // 立即验证读写是否真的通（挂载成功 ≠ 能读写）
+  {
+    File tf = LittleFS.open("/.probe", "w");
+    if (!tf) {
+      Serial.println("[存储] ★ 读写探测失败：无法创建 /.probe");
+      return false;
+    }
+    tf.print("ok");
+    tf.close();
+    File rf = LittleFS.open("/.probe", "r");
+    String got = rf ? rf.readString() : String("");
+    if (rf) rf.close();
+    LittleFS.remove("/.probe");
+    if (got != "ok") {
+      Serial.printf("[存储] ★ 读写探测失败：读回 '%s'\n", got.c_str());
+      return false;
+    }
+    Serial.println("[存储] 读写探测通过");
+  }
+
+  // 刷新几何指纹（只在有变化时写，避免无谓的 flash 擦写）
+  if (!geoOk) {
+    geoWriteU32(GEO_EEPROM_OFF, GEO_MAGIC);
+    geoWriteU32(GEO_EEPROM_OFF + 4, (uint32_t)p->address);
+    geoWriteU32(GEO_EEPROM_OFF + 8, (uint32_t)p->size);
+    EEPROM.commit();
+    Serial.println("[存储] 几何指纹已更新");
+  }
   return true;
 }
 

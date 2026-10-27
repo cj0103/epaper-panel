@@ -4,11 +4,12 @@
  * 任何一种能让 Get Status 读回非 0x00/0xFF 的值，就是接对了。
  *
  * 覆盖的候选：
- *   A) 当前固件设定：SCK12 MOSI11 CS10 DC13 RST14 BUSY15
- *   B) 常见国产驱动板接法：SCK11 MOSI10 CS9 DC8 RST7 BUSY6
- *   C) 交换 MOSI/CS：SCK12 MOSI10 CS11 DC13 RST14 BUSY15
- *   D) 只换 CS/DC：SCK12 MOSI11 CS9  DC8  RST14 BUSY15
- *   E) RST 换 5：SCK12 MOSI11 CS10 DC13 RST5  BUSY15
+ *   A) 当前固件设定：SCK11 MOSI10 CS9 DC8 RST7 BUSY6（老转接板 + S3 主板）
+ *   B) iDevice 整合板：SCK12 MOSI11 CS10 DC13 RST14 BUSY15
+ *   C) 交换 MOSI/CS：SCK11 MOSI9 CS10 DC8 RST7 BUSY6
+ *   D) 只换 CS/DC：SCK11 MOSI10 CS8 DC9 RST7 BUSY6
+ *   E) RST 换 5：SCK11 MOSI10 CS9 DC8 RST5 BUSY6
+ *   F) BUSY 换 4：SCK11 MOSI10 CS9 DC8 RST7 BUSY4
  */
 #include "epd_probe.h"
 #include <SPI.h>
@@ -19,14 +20,12 @@ struct PinSet {
 };
 
 static const PinSet candidates[] = {
-  {"A 现行设定 SCK12/MOSI11/CS10/DC13/RST14/BUSY15", 12, 11, 10, 13, 14, 15},
-  {"B 常见国产板  SCK11/MOSI10/CS9/DC8/RST7/BUSY6",    11, 10,  9,  8,  7,  6},
-  {"C 换MOSI/CS  SCK12/MOSI10/CS11/DC13/RST14/BUSY15", 12, 10, 11, 13, 14, 15},
-  {"D 换CS/DC    SCK12/MOSI11/CS9/DC8/RST14/BUSY15",   12, 11,  9,  8, 14, 15},
-  {"E 换RST      SCK12/MOSI11/CS10/DC13/RST5/BUSY15",   12, 11, 10, 13,  5, 15},
-  {"F 换BUSY     SCK12/MOSI11/CS10/DC13/RST14/BUSY4",   12, 11, 10, 13, 14,  4},
-  {"G 老项目针脚 SCK11/MOSI10/CS9/DC8/RST7/BUSY6 + 24针排线常见序",
-        11, 10,  9,  8,  7,  6},
+  {"A 当前设定   SCK11/MOSI10/CS9/DC8/RST7/BUSY6",      11, 10,  9,  8,  7,  6},
+  {"B iDevice板  SCK12/MOSI11/CS10/DC13/RST14/BUSY15", 12, 11, 10, 13, 14, 15},
+  {"C 换MOSI/CS  SCK11/MOSI9/CS10/DC8/RST7/BUSY6",      11,  9, 10,  8,  7,  6},
+  {"D 换CS/DC    SCK11/MOSI10/CS8/DC9/RST7/BUSY6",      11, 10,  8,  9,  7,  6},
+  {"E 换RST      SCK11/MOSI10/CS9/DC8/RST5/BUSY6",      11, 10,  9,  8,  5,  6},
+  {"F 换BUSY     SCK11/MOSI10/CS9/DC8/RST7/BUSY4",      11, 10,  9,  8,  7,  4},
 };
 
 /* 单次尝试：按给定引脚接线，返回读到的 status（0x00/0xFF 表示无应答） */

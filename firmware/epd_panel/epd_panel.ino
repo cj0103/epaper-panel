@@ -2,13 +2,14 @@
  * epd_panel —— 7.5寸墨水屏 内网投屏面板（课程表 / 作文誊抄 / 公告）
  *
  * 硬件：MMK-E075A41 / 盒马红白黑三色 7.5 寸屏（主控 UC8179）
- *       + iDevice 整合驱动板（ESP32-S3 N16R8）
- * 接线（新板）：SCK=12 MOSI=11 CS=10 DC=13 RST=14 BUSY=15，3V3/GND 板内直连
+ *       + 分立墨水屏转接板 + ESP32-S3 主板
+ * 接线（老方案）：SCK=11 MOSI=10 CS=9 DC=8 RST=7 BUSY=6
  * 方向：竖屏（rotation=1，逻辑 480x800）
  *
  * ★ 屏驱动选择：GDEY075Z08（gdey3c/，UC8179），不是 GDEW075Z08（epd3c/，GD7965）。
  *   两者命令集大体相同（0x01/0x04/0x06/0x10/0x13/0x50/0x61/0x90/0x91/0x92），
  *   但初始化参数、波形表、OTP 处理不同，用错会出现"能通信但不刷新/花屏"。
+ *   （此条与用哪块板无关，只取决于屏的主控型号。）
  *
  * 设计（2026-10-24 与用户确认）：
  *   - 零公网依赖：删除 wttr/一言/60s新闻/NTP（内网时钟不可得，屏上不显示时间）
@@ -31,17 +32,17 @@
 #include "api_panel.h"
 
 /* ---------- 屏与字体 ---------- */
-/* 接线：iDevice 墨水屏驱动板（ESP32-S3 版，S3-WROOM-1 N16R8 模组）。
- * 该整合板 3.3V/GND 已板内直连，外部只接 6 根信号线，
- * GPIO 分配取自厂家针脚表 ESP32-S3 行：
- *   SCK=12  MOSI=11  CS=10  DC=13  RST=14  BUSY=15
- * （旧的分立驱动板接线为 SCK=11 MOSI=10 CS=9 DC=8 RST=7 BUSY=6，已弃用） */
-#define EPD_SCK   12
-#define EPD_MOSI  11
-#define EPD_CS    10
-#define EPD_DC    13
-#define EPD_RST   14
-#define EPD_BUSY  15
+/* 接线：老方案 = 分立墨水屏转接板 + ESP32-S3 主板。
+ * 转接板自带升压电路与 24pin FPC 座，7.5 寸裸屏直插转接板；
+ * S3 主板只出 6 根信号线（3V3/GND 由转接板供给），GPIO 分配：
+ *   SCK=11  MOSI=10  CS=9  DC=8  RST=7  BUSY=6
+ * （iDevice 整合板那套是 SCK=12 MOSI=11 CS=10 DC=13 RST=14 BUSY=15，已弃用） */
+#define EPD_SCK   11
+#define EPD_MOSI  10
+#define EPD_CS     9
+#define EPD_DC     8
+#define EPD_RST    7
+#define EPD_BUSY   6
 
 GxEPD2_3C<GxEPD2_750c_GDEY075Z08, GxEPD2_750c_GDEY075Z08::HEIGHT>
     display(GxEPD2_750c_GDEY075Z08(/*CS=*/ EPD_CS, /*DC=*/ EPD_DC, /*RST=*/ EPD_RST, /*BUSY=*/ EPD_BUSY));
@@ -150,14 +151,12 @@ void setup() {
 }
 
 void setupFull() {
-  // BUSY 下拉必须在 display.init() 之前：
-  // GxEPD2 初始化后会把 BUSY 设为 INPUT（无上下拉）。
-  // 若屏侧没接 BUSY，悬空脚可能读出随机值 → GxEPD2 判定"一直忙"，
-  // 每次 _waitWhileBusy 都要等满 20~30 秒超时，表现为"卡住不动"。
-  // 这里提前设下拉，保证读到稳定的"空闲"（LOW=忙，HIGH=空闲）。
-  pinMode(EPD_BUSY, INPUT_PULLDOWN);
   SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
   display.init(115200);
+  // BUSY 极性对策：覆盖 GxEPD2 在 init() 里设的 INPUT_PULLUP。
+  // 屏侧 BUSY 是推挽输出（LOW=忙 / HIGH=空闲），保持纯输入最稳；
+  // 必须在 display.init() 之后设置，否则会被它改回 INPUT_PULLUP。
+  pinMode(EPD_BUSY, INPUT);
   // 竖屏：面板物理 800x480、竖着摆放 → 需要 rotation=1 才能让文字正立且填满整屏。
   // GxEPD2 的方向由 Adafruit_GFX 的 setRotation 决定（drawPixel 里按 getRotation()
   // 做 90° 像素映射）。不设则停在 rotation=0（逻辑 800x480），内容会被塞进
