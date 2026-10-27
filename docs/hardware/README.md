@@ -1,5 +1,13 @@
 # 硬件参考
 
+## 原厂技术文档（重要，随项目一起入库）
+
+| 文件 | 说明 | 来源 |
+|------|------|------|
+| `HINK-E075A42-Spec-A1.pdf` | 合力泰 HINK-E075A42 规格书（50 页，A1 版）——**本项目所用屏的官方规格**：24pin 针脚定义、命令表、电气特性、参考电路 | https://www.actron.de/wp-content/uploads/HINK-E075A42-Spec-A1.pdf |
+| `GDEY075Z08-Spec.pdf` | 佳显 GoodDisplay GDEY075Z08 规格书（45 页）——同款 UC8179 24pin 玻璃，**带 AES 加密、空口令即可打开** | https://www.laskakit.cz/user/related_files/gdey075z08.pdf |
+| `UC8179-24pin-pinout.md` | 上面两份规格书的**针脚对照速查表**（可直接搜、可 diff），含"裸屏必须外配哪些硬件"清单 | 本项目整理 |
+
 ## 当前方案：分立转接板 + ESP32-S3 主板（2026-10-27 恢复）
 
 - **屏**：MMK-E075A41 / GDEY075Z08，7.5 寸，800×480，黑/白/红三色，主控 **UC8179**
