@@ -2,6 +2,7 @@
 tools/build-panel/
 tools/build-*/
 tools/_preview_*.png
+tools/_font_compare.png
 tools/_*.json
 tools/_*.txt
 __pycache__/
