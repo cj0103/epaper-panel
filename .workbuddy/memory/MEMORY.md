@@ -93,13 +93,28 @@ PartitionScheme=custom,UploadMode=default
   位图字库进公开仓库有外发风险；要可合法外发应改用思源黑体 / Noto Sans CJK (OFL)，
   管线完全一致，只需换字体文件。
 
-## 待修 Bug 清单（2026-10-28 审查，已定位未动手）
-- **P0** `epd_panel.ino:95` `display.display(g_hard_refresh)` 语义反了：
-  GxEPD2 的 `display(bool)` 是 `partial_update_mode`，**`true`=快刷、`false`=整刷**，
-  与注释相反；连带 `epd_panel.ino:213-215` 的 4 次计数和
-  `api_panel.cpp:290,299` 的首末页整刷判断一起反向。
-- **P0** `render_panel.cpp:351-357` `scribeBuildRows` 行号用 `uint8_t`，
-  255 处回绕 → 正文 >4080 汉字（28px 档）必然错乱（页数算错、正文截断）。
+## Bug 清单（2026-10-28 审查 + 实机验证）
+### 已修（commit 01425df，实机验证通过）
+- **P0** `display(display(bool))` 语义反（true=快刷 false=整刷）→ 取反传入；
+- **P0** `scribeBuildRows` 行号 uint8_t 回绕 → uint16_t；
+- **实机新发现** `/api/mode=refresh` 重复置位 g_render_dirty 不构成变化永不触发
+  渲染 → 三处内容推送 API 统一改「先清标志再置」；
+- **实机新发现** 快刷计数必须放 loop 渲染前（放 renderCurrent 开头会被
+  刷新中途复位导致的 boot 重试误累加，攒满后永远整刷）；
+- 上电首刷改整刷（清屏上残留建立干净基准）；
+- 誊抄页脚与正文同档；drawScribe 每页强制 setFontMode(1)
+  （同字体 setFont 是 no-op，不重置透明模式——跨模板切回同字号会拖白底）。
+
+### 实机关键事实
+- **UC8179 局刷（partial）物理耗时 ≈ 整刷**：`_Update_Part` 也要 ~18s
+  （整刷 ~27.5s）。"快刷省时间"在三色 UC8179 上收益有限，设计预期要按此校准。
+- **设备渲染期间 HTTP 完全阻塞**（20+s），客户端读超时是正常现象；
+  测试脚本必须以串口 `display 完成` 为同步点（tools/cadence_test.py）。
+- GxEPD2 partial 路径只重写"脏页"（窗口机制），**整页换内容必须整刷**，
+  所以内容推送类 API 一律 g_hard_refresh=true；翻页/切模式才允许快刷。
+- pyserial 需装到 E:\software\python311（本会话重装过，3.5）。
+
+### 待修（未动手）
 - **P1** `epd_probe.cpp` 每组候选不 `SPI.end()` → 探针引脚不切换，对照失效。
 - **P1** `portal_impl.cpp` 密码只存 32B（WPA2 上限 63）→ 长密码读不回来连不上；
   SSID/密码写入无长度校验。
