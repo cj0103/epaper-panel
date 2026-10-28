@@ -216,7 +216,7 @@ def render_timetable(days, title="四 1 班课程表（游泳周）", out="课�
     maxCols = (PANEL_W - 2 * margin) // px
 
     cv = Canvas(PANEL_W, PANEL_H)
-    f28, f34 = Font("zhhei_28px"), Font("zhhei_34px")
+    f28, f34 = Font("msyh_28px"), Font("msyh_34px")
 
     # 每段全文 + 行数（天标题独占一行 -> 每天 = 1 + 段行数）
     segs, dayLines = [], []
@@ -332,9 +332,9 @@ def build_rows(text, cols):
 
 
 def render_scribe(title="我和哪吒过一天", body="教室里静悄悄的，风吹着树叶沙沙响。",
-                   px=28, author="陈安歌", out="_preview_誊抄.png"):
+                   px=26, author="陈安歌", out="_preview_誊抄.png"):
     cv = Canvas(PANEL_W, PANEL_H)
-    font = Font("zhhei_%dpx" % px)
+    font = Font("msyh_%dpx" % px)
     topH, footH = 22, 44
     availW = PANEL_W - 24
     availH = PANEL_H - topH - footH
@@ -378,10 +378,15 @@ def render_scribe(title="我和哪吒过一天", body="教室里静悄悄的，�
             cx = gx + (ci - rowStart[r]) * cell
             draw_text_at(cv, font, cx + (cell - px) // 2, by + cell - 6, ch, px)
 
-    draw_text_at(cv, font, 14, PANEL_H - 14, "" if (title and page == 0) else title, px)
-    w = text_w("%d/%d 点‹›翻页" % (page + 1, pages), px)
-    draw_text_at(cv, font, PANEL_W - 14 - w, PANEL_H - 14,
-                 "%d/%d 点‹›翻页" % (page + 1, pages), px)
+    # 页脚与正文同档（与固件 drawScribeImpl 一致，不混用 28px 页脚字库）
+    draw_text_at(cv, font, 14, PANEL_H - 14,
+                 "" if (title and page == 0) else title, px)
+    rtxt = "%d/%d 点‹›翻页" % (page + 1, pages)
+    w = text_w(rtxt, px)
+    draw_text_at(cv, font, PANEL_W - 14 - w, PANEL_H - 14, rtxt, px)
+    if not (title and page == 0) and title:
+        clip = max(0, (PANEL_W - 40 - w) // px)
+        draw_text_at(cv, font, 14, PANEL_H - 14, title[:clip], px)
     return cv
 
 
@@ -434,7 +439,7 @@ def main():
         title = "我和哪吒过一天"
         body = "教室里静悄悄的，风吹着树叶沙沙响。"
         author = ""
-        px = 28
+        px = 26
         if len(args) > 1 and args[1].endswith(".txt"):
             raw = Path(args[1]).read_text(encoding="utf-8")
             lines = raw.split("\n")
@@ -449,7 +454,7 @@ def main():
 
     text = args[0]
     px = int(args[1]) if len(args) > 1 else 28
-    font = Font("zhhei_%dpx" % px)
+    font = Font("msyh_%dpx" % px)
     cv = Canvas(PANEL_W, 120)
     x, trace = draw_text_at(cv, font, 10, 70, text, px)
     print("文本 %r  总步进=%d" % (text, x - 10))

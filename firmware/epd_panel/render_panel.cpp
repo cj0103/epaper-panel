@@ -90,7 +90,7 @@ static void setInkFont(const uint8_t* f) {
 }
 
 static void drawFooter(const String& left, const String& right) {
-  setInkFont(zhhei_28px);
+  setInkFont(msyh_28px);
   u8g2Fonts.setForegroundColor(GxEPD_BLACK);
   u8g2Fonts.setBackgroundColor(GxEPD_WHITE);
   drawTextAt(14, PANEL_H - 14, left, 28);
@@ -175,7 +175,7 @@ static uint8_t wrapSeg(const String& s, uint8_t maxCols, String* lines, uint8_t 
 
 void drawTimetable(const PanelTimetable& tt, PanelState& st) {
   if (!tt.valid || tt.days < 1) {  // 空表防御
-    setInkFont(zhhei_34px);
+    setInkFont(msyh_34px);
     u8g2Fonts.setForegroundColor(GxEPD_BLACK);
     u8g2Fonts.setBackgroundColor(GxEPD_WHITE);
     const char* tip = "暂无内容";
@@ -240,14 +240,14 @@ void drawTimetable(const PanelTimetable& tt, PanelState& st) {
   int tpx = 34;
   if (textW(t, 34) > PANEL_W - 2 * margin) tpx = 28;
   if (textW(t, 28) > PANEL_W - 2 * margin) t = utf8Clip(t, (PANEL_W - 2 * margin) / 28);
-  setInkFont(tpx == 34 ? zhhei_34px : zhhei_28px);
+  setInkFont(tpx == 34 ? msyh_34px : msyh_28px);
   u8g2Fonts.setForegroundColor(GxEPD_BLACK);
   u8g2Fonts.setBackgroundColor(GxEPD_WHITE);
   drawTextAt((PANEL_W - textW(t, tpx)) / 2, titleBaseline, t, tpx);
   display.drawLine(margin, sepY, PANEL_W - margin, sepY, GxEPD_BLACK);
 
   // 正文：天标题独占一行（红），段内容顶格排（可用满 16 列）
-  setInkFont(zhhei_28px);
+  setInkFont(msyh_28px);
   int y = firstLine;
   for (uint8_t d = d0; d <= d1; d++) {
     if (y > lastLine) break;
@@ -278,17 +278,34 @@ void drawTimetable(const PanelTimetable& tt, PanelState& st) {
 
 /* ---------- 誊抄模板（分页） ---------- */
 
-/* 字号档 -> px */
+/* 字号档 -> px（26/28/34 三档；默认 26 = 誊抄默认档） */
 static int scribePx(const String& font) {
-  if (font == "big") return 44;
-  if (font == "mid") return 34;
-  return 28;
+  if (font == "big") return 34;
+  if (font == "mid") return 28;
+  return 26;
 }
 
-static const uint8_t* scribeFont(const String& font) {
-  if (font == "big") return zhhei_44px;
-  if (font == "mid") return zhhei_34px;
-  return zhhei_28px;
+static const uint8_t* scribeFontPtr(const String& font) {
+  if (font == "big") return msyh_34px;
+  if (font == "mid") return msyh_28px;
+  return msyh_26px;
+}
+
+/* ★ 誊抄正文一律用**本档字号字库**画（标题+作者+正文+页脚同尺寸）。
+ * 桥接库（U8g2_for_Adafruit_GFX）每行绘制都从当前 setFont 取字形，
+ * 字号一混用，稿纸格子和基线就会错位——这里把"全程同档"钉死。
+ * ★ u8g2_SetFont 在**换字体**时才复位透明模式（setFontMode(1)），
+ *   同字体重复 setFont 是 no-op、不会复位。因此必须每页显式设一次
+ *   透明模式——否则课程表画完切到誊抄（同 28px 字体）时，上一模板
+ *   留下的非透明模式会让每字背后拖白底矩形、盖掉邻行下缘墨迹。
+ * 返回本档 px，正文与页脚绘制共用。 */
+static int scribeSetBodyFont(const String& font) {
+  int px = scribePx(font);
+  setInkFont(scribeFontPtr(font));
+  u8g2Fonts.setFontMode(1);              // 强制透明（不依赖 setFont 是否真正切换）
+  u8g2Fonts.setForegroundColor(GxEPD_BLACK);
+  u8g2Fonts.setBackgroundColor(GxEPD_WHITE);
+  return px;
 }
 
 /* 计算稿纸网格：返回每页字符数，输出 cols/rows/pageText 上限 */
@@ -348,9 +365,10 @@ static uint32_t utf8Code(const String& s, unsigned int start, unsigned int len) 
 
 /* 切行：返回行数。s_scribeRow[i] = 第 i 行起始字符下标；
  * s_scribeRow[行数] = 总字符数（结束标记）。 */
-static uint8_t scribeBuildRows(const PanelScribe& sc, uint8_t cols) {
+static uint16_t scribeBuildRows(const PanelScribe& sc, uint8_t cols) {
   unsigned int total = utf8Chars(sc.text);
-  uint8_t row = 0;
+  uint16_t row = 0;                 // ★ 必须 16 位：28px 档正文超 4080 汉字时
+                                    //   uint8_t 会在 255 处回绕（原 P0 bug）
   unsigned int ci = 0;
   uint8_t col = 0;
   s_scribeRow[0] = 0;
@@ -394,7 +412,7 @@ unsigned int scribeTotalPages(const PanelScribe& sc) {
   uint8_t cols, rows;
   int gx, gy, cell;
   scribeGrid(sc, cols, rows, gx, gy, cell);
-  uint8_t bodyRows = scribeBuildRows(sc, cols);
+  uint16_t bodyRows = scribeBuildRows(sc, cols);
   uint8_t headerLines = scribeHeaderLines(sc, cols);
   unsigned int firstPageRows = (headerLines && headerLines < rows) ? (rows - headerLines) : rows;
   if (bodyRows <= firstPageRows) return 1;
@@ -405,9 +423,10 @@ static void drawScribeImpl(const PanelScribe& sc, PanelState& st) {
   uint8_t cols, rows;
   int gx, gy, cell;
   scribeGrid(sc, cols, rows, gx, gy, cell);
-  uint8_t bodyRows = scribeBuildRows(sc, cols);
+  uint16_t bodyRows = scribeBuildRows(sc, cols);
   bool hasHeader = sc.title.length() > 0;
   uint8_t headerLines = scribeHeaderLines(sc, cols);
+  const int backPx = scribeSetBodyFont(sc.font);   // 全程同档（见函数注释）
 
   // 分页规则：首页 = 标题行(headerLines) + 剩余行正文；后续页 = 整页正文
   unsigned int linesPerPage = rows;
@@ -436,22 +455,17 @@ static void drawScribeImpl(const PanelScribe& sc, PanelState& st) {
     if (r1 > bodyRows) r1 = bodyRows;
   }
 
-  setInkFont(scribeFont(sc.font));
-  u8g2Fonts.setForegroundColor(GxEPD_BLACK);
-  u8g2Fonts.setBackgroundColor(GxEPD_WHITE);
-
-  // ---- 标题（第一页，网格顶部行居中）----
+  // ---- 标题（第一页，网格顶部行居中；用本档字库，已在函数入口设好）----
   if (hasHeader && page == 0) {
-    int pxh = scribePx(sc.font);
     String header = sc.title;
     if (sc.author.length()) { header += " "; header += sc.author; }
     String h = utf8Clip(header, (unsigned int)headerLines * cols);
-    int hw = textW(h, pxh);
-    drawTextAt((PANEL_W - hw) / 2, gy + pxh - 8, h, pxh);
+    int hw = textW(h, backPx);
+    drawTextAt((PANEL_W - hw) / 2, gy + backPx - 8, h, backPx);
   }
 
   // ---- 正文逐行绘制（每行按行内序号定位到格子）----
-  int pxs = scribePx(sc.font);
+  const int pxs = backPx;
   for (unsigned int r = r0; r < r1; r++) {
     int gridRow = (page == 0) ? (int)r + headerLines : (int)r;
     int by = gy + gridRow * cell;
@@ -467,10 +481,15 @@ static void drawScribeImpl(const PanelScribe& sc, PanelState& st) {
     }
   }
 
-  // 页码
+  // 页码（仍用本档字号，避免混档）
   char pr[24];
   snprintf(pr, sizeof(pr), "%u/%u", page + 1, pages);
-  drawFooter(hasHeader && page == 0 ? String() : sc.title, String(pr) + " 点‹›翻页");
+  String right = String(pr) + " 点‹›翻页";
+  unsigned int rw = textW(right, backPx);
+  drawTextAt(PANEL_W - 14 - rw, PANEL_H - 14, right, backPx);
+  if (!(hasHeader && page == 0) && sc.title.length()) {
+    drawTextAt(14, PANEL_H - 14, utf8Clip(sc.title, (PANEL_W - 40 - rw) / backPx), backPx);
+  }
 }
 
 void drawScribe(const PanelScribe& sc, PanelState& st) { drawScribeImpl(sc, st); }
@@ -478,23 +497,23 @@ void drawScribe(const PanelScribe& sc, PanelState& st) { drawScribeImpl(sc, st);
 /* ---------- 公告模板 ---------- */
 
 void drawNotice(const String& text) {
-  setInkFont(zhhei_44px);
+  // 44px 档已随字库下线，公告用最大档 34px：13 字/行
+  setInkFont(msyh_34px);
   u8g2Fonts.setForegroundColor(GxEPD_RED);
   u8g2Fonts.setBackgroundColor(GxEPD_WHITE);
-  // 按 10 字/行断行居中
   unsigned int n = utf8Chars(text);
-  unsigned int lines = (n + 9) / 10;
-  unsigned int y = PANEL_H / 2 - (lines * 60) / 2 + 44;
+  unsigned int lines = (n + 12) / 13;
+  unsigned int y = PANEL_H / 2 - (lines * 48) / 2 + 34;
   for (unsigned int l = 0; l < lines; l++) {
     String line;
-    for (unsigned int i = l * 10; i < min(n, (l + 1) * 10); i++) {
+    for (unsigned int i = l * 13; i < min(n, (l + 1) * 13); i++) {
       unsigned int st, ln;
       utf8Nth(text, i, st, ln);
       line += text.substring(st, st + ln);
     }
-    int w = textW(line, 44);
-    drawTextAt((PANEL_W - w) / 2, y, line, 44);
-    y += 60;
+    int w = textW(line, 34);
+    drawTextAt((PANEL_W - w) / 2, y, line, 34);
+    y += 48;
   }
   drawFooter("临时公告", "");
 }
@@ -503,7 +522,7 @@ void drawNotice(const String& text) {
 
 void drawStatus(const String& text) {
   display.fillScreen(GxEPD_WHITE);
-  setInkFont(zhhei_34px);
+  setInkFont(msyh_34px);
   u8g2Fonts.setForegroundColor(GxEPD_BLACK);
   u8g2Fonts.setBackgroundColor(GxEPD_WHITE);
   int lineH = 56;

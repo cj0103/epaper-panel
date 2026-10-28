@@ -2,6 +2,11 @@
 """
 换字体的最后一道保险：证明「雅黑位图」能被固件同款 v1 解码器正确读出。
 
+★ 本脚本校验的是**重新生成的**字库（make_bdf 的 FONT_FILE + gen_fonts_v1 的
+  SIZES 参数），改档后请同步下面 main() 里的 (px, thr, build) 三元组。
+  （之前踩坑：只改了 gen_fonts_v1.py 就宣布定稿，这里仍用旧档参数生成
+  小样本字库校验，通过的是"另一份字体"，等于没验。）
+
 做法：
   1. 拿 bdfconv 产出的雅黑 v1 字库（.c）
   2. 用 v1_verify.Decoder（逐行复刻 U8g2_for_Adafruit_GFX 的解析器）解出像素
@@ -95,7 +100,7 @@ def bitmap_from_pillow(path, index, px, thr, ch):
 def main():
     chars = make_bdf.collect_chars()
     allok = True
-    for px, thr, build_mode in ((28, 110, 2), (34, 110, 2), (42, 180, 0)):
+    for px, thr, build_mode in ((26, 110, 2), (28, 110, 2), (34, 110, 2)):
         print("== 雅黑 %dpx (thr=%d, build=%d) ==" % (px, thr, build_mode))
         try:
             data = make_font(MSYH[0], MSYH[1], px, thr, build_mode, chars)

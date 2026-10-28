@@ -16,18 +16,18 @@ void fontProbe() {
   g_probe.begin(display);
 
   static const char* probe[] = {"A", "0", "a", "!", "课", "程", "表", "，", "。"};
-  g_probe.setFont(zhhei_34px);
+  g_probe.setFont(msyh_34px);
   Serial.println("[自检] 字库测量 (34px):");
   for (auto s : probe) {
     Serial.print("[自检]   '"); Serial.print(s);
     Serial.print("' 墨迹宽="); Serial.print(g_probe.getUTF8Width(s));
     Serial.println();
   }
-  g_probe.setFont(zhhei_28px);
-  Serial.print("[自检] 28px '课' 墨迹宽=");
+  g_probe.setFont(msyh_26px);
+  Serial.print("[自检] 26px '课' 墨迹宽=");
   Serial.println(g_probe.getUTF8Width("课"));
-  g_probe.setFont(zhhei_44px);
-  Serial.print("[自检] 44px '课' 墨迹宽=");
+  g_probe.setFont(msyh_34px);
+  Serial.print("[自检] 34px '课' 墨迹宽=");
   Serial.println(g_probe.getUTF8Width("课"));
   Serial.println("[自检] 字库 OK");
 }

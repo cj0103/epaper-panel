@@ -44,10 +44,10 @@ label{display:block;margin:8px 0 2px;font-size:14px;color:#555}
 </div>
 <div class="card"><h2>推送作文（誊抄模式）</h2>
 <label>标题（可空）</label><input id="stitle" placeholder="《我的妈妈》">
-<label>正文字数：<span id="cnt">0</span>（约28px 350字/页，自动分页）</label>
+<label>正文字数：<span id="cnt">0</span>（26px 约470字/页，自动分页）</label>
 <textarea id="stext" rows="8" placeholder="粘贴作文草稿…"></textarea>
-<label>字号档</label>
-<select id="sfont"><option value="small">小（28px·约400字/页）</option><option value="mid">中（34px）</option><option value="big">大（44px）</option></select>
+<label>字号档（誊抄正文·标题·页脚同尺寸）</label>
+<select id="sfont"><option value="small">小（26px·默认·约470字/页）</option><option value="mid">中（28px·约400字/页）</option><option value="big">大（34px·约280字/页）</option></select>
 <button onclick="pushScribe()">推送到屏幕</button>
 <button class="sec" onclick="postMode('next')">下一页 ›</button>
 <button class="sec" onclick="postMode('prev')">‹ 上一页</button>
@@ -226,7 +226,11 @@ void handleApiTimetable() {
   g_panel.tt_page = 0;
   g_panel.mode = "timetable";
   modeWrite(g_panel.mode);
-  g_render_dirty = true; g_hard_refresh = true;
+  // 内容整体替换=全页面变化，必须整刷：GxEPD2 的 partial 路径只重写"脏页"，
+  // 整页换内容若走快刷会漏刷未标脏的窗口页（2026-10-28 实机发现画面不全）。
+  g_render_dirty = false;
+  g_hard_refresh = true;
+  g_render_dirty = true;
   sendOk(true, "\"mode\":\"timetable\"");
   Serial.println("[API] 课程表已更新");
 }
@@ -247,7 +251,10 @@ void handleApiScribe() {
   g_panel.scribe_page = 0;
   g_panel.mode = "scribe";
   modeWrite(g_panel.mode);
-  g_render_dirty = true; g_hard_refresh = true;
+  // 同 handleApiTimetable：整页替换必须整刷（先清标志再置，确保触发渲染）
+  g_render_dirty = false;
+  g_hard_refresh = true;
+  g_render_dirty = true;
   sendOk(true, "\"pages\":" + String(scribeTotalPages(g_panel.sc)));
   Serial.println("[API] 誊抄内容已更新");
 }
@@ -260,7 +267,10 @@ void handleApiDisplay() {
   g_panel.notice = body;
   g_panel.mode = "notice";
   modeWrite(g_panel.mode);
-  g_render_dirty = true; g_hard_refresh = true;
+  // 同 handleApiTimetable：整页替换必须整刷（先清标志再置，确保触发渲染）
+  g_render_dirty = false;
+  g_hard_refresh = true;
+  g_render_dirty = true;
   sendOk(true);
   Serial.println("[API] 公告已显示");
 }
@@ -278,7 +288,13 @@ void handleApiMode() {
     if (g_panel.notice.length() == 0) { sendErr("暂无公告，请先通过 /api/display 或主页发布"); return; }
     g_panel.mode = "notice";
   } else if (body == "refresh") {
-    g_render_dirty = true; g_hard_refresh = true;
+    // 强制整刷：置标志交给 loop 执行。不能在这里现场渲染——整刷要 20+ 秒，
+    // 会把 HTTP 响应一起堵死，客户端必然读超时（2026-10-28 实机发现）。
+    // loop 侧的快刷计数会把这次当"第 N 次快刷"自动转整刷，最迟 4 次内必整刷；
+    // 计数在 loop 渲染前执行（见 epd_panel.ino），不会被 boot 重试误累加。
+    g_render_dirty = false;
+    g_hard_refresh = true;
+    g_render_dirty = true;
     sendOk(true);
     return;
   } else if (body == "next" || body == "prev") {

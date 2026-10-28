@@ -14,8 +14,9 @@
  * 设计（2026-10-24 与用户确认）：
  *   - 零公网依赖：删除 wttr/一言/60s新闻/NTP（内网时钟不可得，屏上不显示时间）
  *   - 内容通道：局域网 HTTP（/api/* + 手机主页），Flash(LittleFS) 断电保留
- *   - 刷新：内容变化才刷；誊抄翻页快刷，每 4 次快刷整刷清残影；手动 /api/mode=refresh
- *   - 字号三档 big44/mid34/small28（默认 small=D档≈350字/页），手机端可选
+ *   - 刷新：内容变化才刷；上电首刷快刷（屏上原内容还在，不闪白），
+ *     连续快刷每 4 次强制整刷清残影；手动 /api/mode=refresh 立即整刷
+ *   - 字号三档 26/28/34 雅黑；誊抄默认 26px 可选，课程表固定 28px
  *   - 配网：EEPROM 存凭据；无配置开热点 EPD-Panel-Setup；/reset 逃生入口
  *
  * 模板注册表（扩展新屏显=加模板+注册）见 render_panel.cpp 首行注释
@@ -91,8 +92,14 @@ static void renderCurrent() {
   } else {
     drawTimetable(g_panel.tt, g_panel);
   }
-  Serial.printf("[%6lu] 绘制完成, display(%d) 开始\n", millis(), g_hard_refresh);
-  display.display(g_hard_refresh); // true=整屏刷新清残影, false=快刷
+  // ★ GxEPD2 的 display(bool) 形参是 partial_update_mode，语义与 g_hard_refresh 相反：
+  //   true=局刷快刷（不清残影），false=_Update_Full() 整刷（清残影）。
+  //   （已核对库源码 GxEPD2_3C::display → epd2.refresh(partial_update_mode)）
+  //   注意 GxEPD2 的窗口机制：partial=true 时只把脏页（_current_page）重写到
+  //   RAM 再局刷；整刷路径才 flush 全部页。所以**全页面大改动（如整页换内容）
+  //   必须走整刷**，快刷只适用于翻页/局部变化的场景。
+  Serial.printf("[%6lu] 绘制完成, display(partial=%d) 开始\n", millis(), !g_hard_refresh);
+  display.display(!g_hard_refresh);
   Serial.printf("[%6lu] display 完成\n", millis());
   g_hard_refresh = false;
   g_render_dirty = false;
@@ -184,6 +191,7 @@ void setupFull() {
   if (!settingMode) {
     registerPanelRoutes();
     Serial.println("routes ok");
+    g_hard_refresh = true;   // 上电首刷整刷：清掉屏上残留的旧内容，建立干净基准
     renderCurrent(); // 首屏
     Serial.print("投喂主页: http://");
     Serial.println(WiFi.localIP());
@@ -208,9 +216,14 @@ void loop() {
   webServer.handleClient();
 
   if (!settingMode && g_render_dirty) {
+    // ★ 快刷计数在这里（渲染真正执行前，一次刷新恰好计一次），不能放
+    //   renderCurrent 开头——若刷新中途复位，renderCurrent 里的计数每轮
+    //   boot 都被计一次，攒满 4 次后永远整刷（2026-10-28 实机踩坑）。
+    //   g_hard_refresh==true 表示本次整刷；连续快刷计满 4 次强制整刷清残影。
     static uint8_t fastRefreshCount = 0;
-    // 快刷计满 4 次强制整刷一次，抑制残影
-    if (!g_hard_refresh) {
+    if (g_hard_refresh) {
+      fastRefreshCount = 0;
+    } else {
       fastRefreshCount++;
       if (fastRefreshCount >= 4) { g_hard_refresh = true; fastRefreshCount = 0; }
     }

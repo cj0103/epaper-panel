@@ -31,10 +31,12 @@ BDFCONV = U8G2 / "bdfconv.exe"
 #  28/34px: 阈值 110（笔画饱满），build 2（统一字高）
 #  44px:    阈值 180（只留笔画核心，避免 v1 单字形 >255B），
 #           build 0（最小位图，进一步减小游程数）
+# 2026-10-28 定档：雅黑 26/28/34（誊抄默认26可选档，课程表固定28）
+# 全部阈值 110、build 2；雅黑 44px 因 v1 单字形 255B 上限不可行，已弃用
 SIZES = {
+    26: dict(build=2, threshold=110),
     28: dict(build=2, threshold=110),
     34: dict(build=2, threshold=110),
-    44: dict(build=0, threshold=180),
 }
 
 # 收录范围：ASCII 可打印 + CJK 统一表意 + GB2312 符号区 + 中文标点 + 全角
@@ -89,10 +91,10 @@ def main():
     print("字符集 %d (ASCII %d)" % (len(chars),
                                     sum(1 for c in chars if ord(c) < 128)))
 
-    cpp = ["// 自动生成：u8g2 v1 中文字库（黑体）by gen_fonts_v1.py",
+    cpp = ["// 自动生成：u8g2 v1 中文字库（微软雅黑 26/28/34）by gen_fonts_v1.py",
            "// 由 u8g2 官方 bdfconv -f 1 生成，兼容 U8g2_for_Adafruit_GFX v1.8.0",
            '#include "fonts_ink.h"', "#include <u8g2_fonts.h>", ""]
-    h = ["// 自动生成：u8g2 v1 中文字库声明（黑体）",
+    h = ["// 自动生成：u8g2 v1 中文字库声明（微软雅黑 26/28/34）",
          "#ifndef FONTS_INK_H", "#define FONTS_INK_H",
          "#include <stdint.h>", "",
          "// 每档字号一个字体，含 ASCII + GB2312 + CJK 统一表意 + 中文标点。",
@@ -108,14 +110,14 @@ def main():
                 src = old.read_text(encoding="utf-8")
                 import re as _re
                 m = _re.search(r"const\s+uint8_t\s+%s\s*\[\s*\d+\s*\][^=]*?=\s*"
-                               r"((?:\"[^\"]*\"\s*)+);" % ("zhhei_%dpx" % px), src)
+                               r"((?:\"[^\"]*\"\s*)+);" % ("msyh_%dpx" % px), src)
                 if m:
                     data = _unescape_all(m.group(1))
-                    emit_cpp(cpp, h, "zhhei_%dpx" % px, data)
+                    emit_cpp(cpp, h, "msyh_%dpx" % px, data)
                     total += len(data) + 1
                     print("=== %dpx === (沿用已有字库)" % px, flush=True)
             continue
-        bdf = WORK / ("simhei%d.bdf" % px)
+        bdf = WORK / ("msyh%d.bdf" % px)
         raw = WORK / ("raw%d.c" % px)
         print("=== %dpx ===" % px, flush=True)
         n, sk = write_bdf(str(bdf), chars, px, threshold=cfg["threshold"])
@@ -125,7 +127,7 @@ def main():
         from parse_cfont import parse_c_font
         name, data, declared = parse_c_font(str(raw))
         print("  v1 字体 %d B (声明 %d)" % (len(data), declared), flush=True)
-        emit_cpp(cpp, h, "zhhei_%dpx" % px, data)
+        emit_cpp(cpp, h, "msyh_%dpx" % px, data)
         total += len(data) + 1
 
     h += ["#endif", ""]

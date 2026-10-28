@@ -34,7 +34,10 @@ import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
-FONT_FILE = r"C:\Windows\Fonts\simhei.ttf"
+# 微软雅黑（TTC，face index=0 即 Microsoft YaHei Regular）
+# 2026-10-28 由黑体切换：26/28/34 三档 thr=110/build=2 全部通过
+# （旧黑体 C:\Windows\Fonts\simhei.ttf；要合法外发改思源黑体 OFL，管线不变）
+FONT_FILE = r"C:\Windows\Fonts\msyh.ttc"
 SUPERSAMPLE = 4
 THRESHOLD = 110
 # 可调阈值：大字号（44px）单字形墨量过高会让 v1 RLE 压缩超过 255B 上限，
@@ -166,7 +169,7 @@ def write_bdf(path, chars, px, font=None, threshold=None):
 
     lines = []
     lines.append("STARTFONT 2.1")
-    lines.append("FONT simhei-%dpx" % px)
+    lines.append("FONT msyh-%dpx" % px)
     lines.append("SIZE %d 75 75" % px)
     lines.append("FONTBOUNDINGBOX %d %d 0 %d" % (px, ascent + descent, -descent))
     lines.append("STARTPROPERTIES 2")
