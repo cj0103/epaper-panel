@@ -63,3 +63,51 @@ PartitionScheme=custom,UploadMode=default
 - COM 口会漂移（COM8↔COM9），先 `serial.tools.list_ports` 确认
 - 读日志必须 `dsrdtr=False` 且开端口后立即 `dtr=False; rts=False`
 - 仓库副本没有 arduino-cli.exe，借用 `../../2026-10-22-19-44-10/tools/arduino-cli.exe`
+
+## 字库（v1 格式）关键事实
+- 管线：Pillow 渲染（4× 超采样 → LANCZOS → 阈值二值化）→ BDF → **官方 `bdfconv -f 1`**
+  → `fonts_ink.cpp`。`bdfconv.exe` 已放进仓库 `tools/u8g2tools/`（gitignore 内）。
+- **u8g2 v1 单字形硬上限 255B**（字形项 = 编码2B + 尺寸1B + 位流N B），
+  超过就 `RLE Compress: Error, glyph too large`，**整个字库生成失败**。
+- BDF 里 `DWIDTH` 固定 px、`SWIDTH = px*1000/8` → advance 恒等于字号（等宽）。
+- 空格不入字库（渲染层按 px 补位）。
+- 体积口径：`.c` 是八进制转义源码，比二进制**虚高 ~2.8 倍**，
+  量体积必须用 `parse_c_font` 还原二进制再量。
+- build mode：0=最紧凑 / 1=统一字高 / 2=统一字宽 / 3=宽高取 8 的倍数。
+
+## 字体选型（2026-10-28 定档，尚未实施）
+- 目标字体：微软雅黑 `C:\Windows\Fonts\msyh.ttc`（TTC，face index=0）
+- **雅黑 44px 不可行**：笔画比黑体密，v1 单字形 255B 上限必爆（所有阈值、
+  所有 build mode 都不行，只有 thr≥250 能过但字会极瘦）。
+- **推荐**：雅黑 28px/thr110/build2 + 34px/thr110/build2 + **42px**/thr180/build0
+  - 体积 638,735 + 834,982 + 1,038,068 = 2,511,785 B（黑体基线 2,446,703 B，+2.7%）
+  - 28/34px 阈值与黑体完全一致；雅黑墨量比黑体多 12%（二值化后更"实"）
+  - 42px：`cols` 仍 10、`rows` 16→17（每页多 10 字）
+  - v1 解码已用 `v1_verify.Decoder` 像素级验证通过（31 字全一致，advance 仍=字号）
+- 需同步改动点：`make_bdf.py` FONT_FILE / `gen_fonts_v1.py` SIZES(44→42) 与符号名
+  (`zhhei_*px`→`msyh_*px`) / `render_panel.cpp:283,289` / `api_panel.cpp:50` 网页文案 /
+  `host_render.py` 的 `Font("zhhei_%dpx")` 三处
+- ⚠️ 许可：`simhei.ttf` 与 `msyh.ttc` 同为 Windows 商业字体，
+  位图字库进公开仓库有外发风险；要可合法外发应改用思源黑体 / Noto Sans CJK (OFL)，
+  管线完全一致，只需换字体文件。
+
+## 待修 Bug 清单（2026-10-28 审查，已定位未动手）
+- **P0** `epd_panel.ino:95` `display.display(g_hard_refresh)` 语义反了：
+  GxEPD2 的 `display(bool)` 是 `partial_update_mode`，**`true`=快刷、`false`=整刷**，
+  与注释相反；连带 `epd_panel.ino:213-215` 的 4 次计数和
+  `api_panel.cpp:290,299` 的首末页整刷判断一起反向。
+- **P0** `render_panel.cpp:351-357` `scribeBuildRows` 行号用 `uint8_t`，
+  255 处回绕 → 正文 >4080 汉字（28px 档）必然错乱（页数算错、正文截断）。
+- **P1** `epd_probe.cpp` 每组候选不 `SPI.end()` → 探针引脚不切换，对照失效。
+- **P1** `portal_impl.cpp` 密码只存 32B（WPA2 上限 63）→ 长密码读不回来连不上；
+  SSID/密码写入无长度校验。
+- **P1** `portal_impl.cpp:58` `urlDecode()` 只认固定大写 `%XX`，
+  中文 SSID 断链（core WebServer **不**做解码，这层必须自己写对）。
+- **P1** `api_panel.cpp:323-333` JSON 只转义 `"` `\` `\n`，漏 `\r` `\t` → 非法 JSON。
+- **P2** API 无请求体长度上限；`tt.days/tt.periods` 先截断后校验；
+  `DynamicJsonDocument` 在 ArduinoJson 7.4.3 已废弃（且 v7 内存池动态增长，
+  容量参数被忽略）；`ssidList` 重复累积。
+- 已验证**没问题**别误改：SPI 实际 4MHz（GxEPD2 构造里 `_spi_settings(4000000,...)`）；
+  固件先 `SPI.begin(自定义引脚)` 不会被 GxEPD2 覆盖（core `if(_spi) return`）；
+  core 3.3.10 的 `begin()` 不调 `spiAttachSS` 故 CS 手动控制无冲突；
+  红/黑/白三色通路完好（`fg_color` 是 uint16_t，0xF800 不截断）。
