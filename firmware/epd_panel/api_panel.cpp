@@ -199,6 +199,22 @@ static void sendErr(const String& err) {
 volatile bool g_render_dirty = false;   // 需要全量重绘
 volatile bool g_hard_refresh = false;   // 本次要求整屏刷新（清残影）
 
+/* ★ 本项目渲染模式 = 每帧 fillScreen + 整屏重绘，永远不用 setWindow 局窗。
+ * 这种模式下 GxEPD2 的快刷路径 display(true) 有致命短板（GxEPD2_BW.h:361）：
+ * 它只把"当前页"（最后落笔所在的 60px 软件页）写入屏 RAM 就触发局刷，
+ * 其余页不重写。翻页后新页内容若落在屏幕上半部（第 2 页正是如此），
+ * 下半部未被重写，局刷把上一屏内容原样留在屏上——用户看到的
+ * "第二页内容显示在屏幕下部"（2026-10-28 实机确认）。
+ * 结论：一切渲染统一整刷。UC8179 的局刷物理耗时 ~18s 与整刷 27.5s 差距
+ * 有限，且每次局刷后仍要定期整刷清残影，快刷已无收益。
+ * 若将来要做真正的局部刷新（如只更新页码），须改为 displayWindow
+ * 或 setWindow+nextPage 协议重设计渲染层。 */
+void requestRender() {
+  g_render_dirty = false;   // 先清再置：重复置位不构成变化，loop 不会触发
+  g_hard_refresh = true;
+  g_render_dirty = true;
+}
+
 /* ---------- 路由 ---------- */
 
 void handleHome() {
@@ -226,11 +242,7 @@ void handleApiTimetable() {
   g_panel.tt_page = 0;
   g_panel.mode = "timetable";
   modeWrite(g_panel.mode);
-  // 内容整体替换=全页面变化，必须整刷：GxEPD2 的 partial 路径只重写"脏页"，
-  // 整页换内容若走快刷会漏刷未标脏的窗口页（2026-10-28 实机发现画面不全）。
-  g_render_dirty = false;
-  g_hard_refresh = true;
-  g_render_dirty = true;
+  requestRender();
   sendOk(true, "\"mode\":\"timetable\"");
   Serial.println("[API] 课程表已更新");
 }
@@ -251,10 +263,7 @@ void handleApiScribe() {
   g_panel.scribe_page = 0;
   g_panel.mode = "scribe";
   modeWrite(g_panel.mode);
-  // 同 handleApiTimetable：整页替换必须整刷（先清标志再置，确保触发渲染）
-  g_render_dirty = false;
-  g_hard_refresh = true;
-  g_render_dirty = true;
+  requestRender();
   sendOk(true, "\"pages\":" + String(scribeTotalPages(g_panel.sc)));
   Serial.println("[API] 誊抄内容已更新");
 }
@@ -267,10 +276,7 @@ void handleApiDisplay() {
   g_panel.notice = body;
   g_panel.mode = "notice";
   modeWrite(g_panel.mode);
-  // 同 handleApiTimetable：整页替换必须整刷（先清标志再置，确保触发渲染）
-  g_render_dirty = false;
-  g_hard_refresh = true;
-  g_render_dirty = true;
+  requestRender();
   sendOk(true);
   Serial.println("[API] 公告已显示");
 }
@@ -288,13 +294,9 @@ void handleApiMode() {
     if (g_panel.notice.length() == 0) { sendErr("暂无公告，请先通过 /api/display 或主页发布"); return; }
     g_panel.mode = "notice";
   } else if (body == "refresh") {
-    // 强制整刷：置标志交给 loop 执行。不能在这里现场渲染——整刷要 20+ 秒，
-    // 会把 HTTP 响应一起堵死，客户端必然读超时（2026-10-28 实机发现）。
-    // loop 侧的快刷计数会把这次当"第 N 次快刷"自动转整刷，最迟 4 次内必整刷；
-    // 计数在 loop 渲染前执行（见 epd_panel.ino），不会被 boot 重试误累加。
-    g_render_dirty = false;
-    g_hard_refresh = true;
-    g_render_dirty = true;
+    // 强制整刷：交给 loop 执行（不能在现场渲染——整刷 20+ 秒会把 HTTP
+    // 响应堵死，客户端必然读超时，2026-10-28 实机发现）。
+    requestRender();
     sendOk(true);
     return;
   } else if (body == "next" || body == "prev") {
@@ -302,8 +304,7 @@ void handleApiMode() {
       // 课程表也可能分页（天块不跨页）
       if (body == "next") { if (g_panel.tt_page + 1 < g_panel.tt_pages) g_panel.tt_page++; }
       else { if (g_panel.tt_page > 0) g_panel.tt_page--; }
-      g_render_dirty = true;
-      g_hard_refresh = (g_panel.tt_page == 0 || g_panel.tt_page + 1 == g_panel.tt_pages);
+      requestRender();
       sendOk(true, "\"page\":" + String(g_panel.tt_page + 1));
       return;
     }
@@ -311,8 +312,7 @@ void handleApiMode() {
     unsigned int pages = scribeTotalPages(g_panel.sc);
     if (body == "next") { if (g_panel.scribe_page + 1 < pages) g_panel.scribe_page++; }
     else { if (g_panel.scribe_page > 0) g_panel.scribe_page--; }
-    g_render_dirty = true;
-    g_hard_refresh = (g_panel.scribe_page == 0 || g_panel.scribe_page + 1 == pages); // 首末页整刷清残影
+    requestRender();
     sendOk(true, "\"page\":" + String(g_panel.scribe_page + 1));
     return;
   } else {
@@ -320,7 +320,7 @@ void handleApiMode() {
     return;
   }
   modeWrite(g_panel.mode);
-  g_render_dirty = true; g_hard_refresh = true;
+  requestRender();
   sendOk(true, "\"mode\":\"" + g_panel.mode + "\"");
 }
 

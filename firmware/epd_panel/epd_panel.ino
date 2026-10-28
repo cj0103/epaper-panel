@@ -216,17 +216,9 @@ void loop() {
   webServer.handleClient();
 
   if (!settingMode && g_render_dirty) {
-    // ★ 快刷计数在这里（渲染真正执行前，一次刷新恰好计一次），不能放
-    //   renderCurrent 开头——若刷新中途复位，renderCurrent 里的计数每轮
-    //   boot 都被计一次，攒满 4 次后永远整刷（2026-10-28 实机踩坑）。
-    //   g_hard_refresh==true 表示本次整刷；连续快刷计满 4 次强制整刷清残影。
-    static uint8_t fastRefreshCount = 0;
-    if (g_hard_refresh) {
-      fastRefreshCount = 0;
-    } else {
-      fastRefreshCount++;
-      if (fastRefreshCount >= 4) { g_hard_refresh = true; fastRefreshCount = 0; }
-    }
+    // 本项目渲染一律整刷（requestRender 统一置 g_hard_refresh=true，
+    // 原因见 api_panel.cpp）。若将来重设计为 displayWindow 真局刷，
+    // 再在这里恢复"连续快刷 N 次强制整刷"的残影控制。
     renderCurrent();
   }
   delay(50);
