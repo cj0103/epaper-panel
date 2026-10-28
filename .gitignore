@@ -3,6 +3,9 @@ tools/build-panel/
 tools/build-*/
 tools/_preview_*.png
 tools/_font_compare.png
+tools/_font_sizes.png
+tools/_font_diff.png
+tools/_font_real.png
 tools/_*.json
 tools/_*.txt
 __pycache__/
