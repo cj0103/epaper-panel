@@ -369,7 +369,8 @@ def render_scribe(title="我和哪吒过一天", body="教室里静悄悄的，�
 
     chars = list(body)
     for r in range(r0, r1):
-        gridRow = r + headerLines if page == 0 else r
+        # 本页格行号 = 全局行号 - 本页起始行号；标题行只占首页顶部
+        gridRow = (r - r0) + (headerLines if page == 0 else 0)
         by = gy + gridRow * cell
         for ci in range(rowStart[r], rowStart[r + 1]):
             ch = chars[ci]

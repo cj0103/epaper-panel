@@ -467,7 +467,10 @@ static void drawScribeImpl(const PanelScribe& sc, PanelState& st) {
   // ---- 正文逐行绘制（每行按行内序号定位到格子）----
   const int pxs = backPx;
   for (unsigned int r = r0; r < r1; r++) {
-    int gridRow = (page == 0) ? (int)r + headerLines : (int)r;
+    // ★ 本页格行号 = 全局行号 - 本页起始行号；标题行只占首页顶部。
+    //   （曾用 gridRow=r 直接拿全局行号，第2页 by=22+27*26=724，
+    //   内容全被推到屏幕底部、上部大片空白——2026-10-28 实机确认）
+    int gridRow = (int)(r - r0) + ((page == 0) ? (int)headerLines : 0);
     int by = gy + gridRow * cell;
     unsigned int from = s_scribeRow[r], to = s_scribeRow[r + 1];
     for (unsigned int ci = from; ci < to; ci++) {
