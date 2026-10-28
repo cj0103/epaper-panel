@@ -27,6 +27,9 @@
   - 换驱动时 `render_panel.h` 的 extern 声明必须同步改
 - BUSY 为 active-LOW（低=忙），与 GxEPD2 `busy_level=LOW` 一致
 - 竖屏使用：rotation=1（逻辑 480×800）
+- **不支持灰度（2026-10-28 调查定案）**：UC8179 只有 0x10(黑/白)+0x13(红/白)两个
+  1-bit buffer；驱动 lut_20~25 全是 partial update LUT（非灰度 LUT），GxEPD2 无灰度接口。
+  同尺寸想要 16 灰度 = 换黑白屏 GDEY075T7。伪灰度可软件 dithering（1-bit 网点模拟）。
 
 ## 编译参数（固定）
 ```
@@ -77,13 +80,12 @@ PartitionScheme=custom,UploadMode=default
 
 ## 字体选型（2026-10-28 定档，尚未实施）
 - 目标字体：微软雅黑 `C:\Windows\Fonts\msyh.ttc`（TTC，face index=0）
-- **雅黑 44px 不可行**：笔画比黑体密，v1 单字形 255B 上限必爆（所有阈值、
-  所有 build mode 都不行，只有 thr≥250 能过但字会极瘦）。
-- **推荐**：雅黑 28px/thr110/build2 + 34px/thr110/build2 + **42px**/thr180/build0
-  - 体积 638,735 + 834,982 + 1,038,068 = 2,511,785 B（黑体基线 2,446,703 B，+2.7%）
-  - 28/34px 阈值与黑体完全一致；雅黑墨量比黑体多 12%（二值化后更"实"）
-  - 42px：`cols` 仍 10、`rows` 16→17（每页多 10 字）
-  - v1 解码已用 `v1_verify.Decoder` 像素级验证通过（31 字全一致，advance 仍=字号）
+- **★ 用户最终拍板：字号档 = 26 / 28 / 34**（三档 thr=110 build=2 全部可行，
+  实测体积比黑体同档 +2.8%~+3.4%）。彻底绕开雅黑 44px 的 255B 上限问题。
+  落地时大档 44→34：誊抄正文 `cols` 10→12、`rows` 16→20（每页 160→240 字）。
+- 存档：雅黑 44px 不可行（v1 单字形 255B 上限必爆，所有阈值/build mode 都不行）；
+  42px/thr180/build0 可行（1,038,068B）——若将来想恢复大标题档可走 42px。
+- v1 解码已用 `v1_verify.Decoder` 像素级验证通过（advance 仍=字号，等宽）。
 - 需同步改动点：`make_bdf.py` FONT_FILE / `gen_fonts_v1.py` SIZES(44→42) 与符号名
   (`zhhei_*px`→`msyh_*px`) / `render_panel.cpp:283,289` / `api_panel.cpp:50` 网页文案 /
   `host_render.py` 的 `Font("zhhei_%dpx")` 三处
