@@ -153,18 +153,18 @@ static void renderCurrent() {
       display.display(true);                  // 整刷内部已把两份 RAM 立为当前帧
       if (g_prev_black) memcpy(g_prev_black, cur, BUF);
     } else {
-      // ★ v3（2026-10-29 用户拍板"加重版刷白"）：差分前先来一遍
-      //   clear_full_bw（驱动本地补丁：寄存器 LUT，K→W 12 帧/W→W 8 帧）
-      //   整屏强制回白，残影电荷每次归零。
-      //   注意 clear_full_bw 会把两份屏 RAM 都写成全白（0xFF），随后
-      //   writeImageToPrevious 传全白 0xFF（= 清屏后的真实屏状态），
-      //   writeImageToCurrent 传新内容 → 差分为 白→新帧。
-      //   g_prev_black 仍滚动保存内容帧，供断电重启/切回整刷时快速重建。
-      // clear_full_bw 已把两份 RAM 写成全白；这里只需把"旧帧 RAM"
-      // 再刷成与清屏后屏面一致的全白（writeScreenBuffer 公开接口，
-      // 双 buffer 同写全白，等价于 _writeScreenBuffer(0x13, 0xFF)）
+      // ★ v3.1（修复 v3 叠字回归）：前置加重刷白 + 差分，顺序不可乱。
+      //   v3 翻车复盘：清屏后调了 writeScreenBuffer(0xFF,0xFF)——它把
+      //   两份 RAM 一起刷白，刚写进"新帧 RAM"的内容被抹掉，差分变成
+      //   白→白（啥也不驱动），随后内容只写进了"旧帧 RAM"（语义反了）
+      //   → 用户所见：没刷白、直接叠字（2026-10-29 实机）。
+      //   正确顺序（clear_full_bw 内部已把两份 RAM 写全白并完成刷白）：
+      //    a) 旧帧 RAM ← 全白：clear_full_bw 已经写了，**不再做任何
+      //       全屏覆写**（v3 的教训：任何"顺手清一下"都会毁掉基准）；
+      //    b) 新帧 RAM ← 当前内容（writeImageToCurrent，只动 0x10）；
+      //    c) refresh_bw 差分：白→内容；
+      //    d) 镜像滚动仅供断电重启后重建，不参与差分链。
       display.epd2.clear_full_bw();
-      display.epd2.writeScreenBuffer(0xFF, 0xFF);
       display.epd2.writeImageToCurrent(cur, 0, 0,
           GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
       display.epd2.refresh_bw(0, 0,
