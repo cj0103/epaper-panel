@@ -87,9 +87,11 @@ def main():
     if b"clear_full_bw" in raw:
         print("cpp: already patched")
     else:
-        anchor = "void GxEPD2_750c_GDEY075Z08::refresh_bw(int16_t x, int16_t y, int16_t w, int16_t h)\n{".encode()
+        # 注意：必须插在 refresh_bw 函数定义【之前】。曾把新函数体插到
+        # "函数头+\n{" 之后 = 嵌进旧函数体内，编译报 qualified-id 错误。
+        anchor = "void GxEPD2_750c_GDEY075Z08::refresh_bw(int16_t x, int16_t y, int16_t w, int16_t h)".encode()
         assert raw.count(anchor) == 1, raw.count(anchor)
-        open(CPP, "wb").write(raw.replace(anchor, anchor + IMPL.encode(), 1))
+        open(CPP, "wb").write(raw.replace(anchor, IMPL.lstrip("\n").encode() + "\n" + anchor, 1))
         print("cpp: patched")
 
     hr = open(H, "rb").read()
