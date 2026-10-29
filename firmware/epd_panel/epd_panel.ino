@@ -25,8 +25,33 @@
  * 模板注册表（扩展新屏显=加模板+注册）见 render_panel.cpp 首行注释
  */
 #include <U8g2_for_Adafruit_GFX.h>
-#include <GxEPD2_3C.h>
+#include <type_traits>
 #include <EEPROM.h>
+
+/* ---------- 取回 GxEPD2_3C 的黑缓冲 ----------
+ * BW 差分快刷要"旧帧 RAM 全屏回写"（见 renderCurrent v2 注释），需要
+ * 拿到 display 内部的 _black_buffer，而 GxEPD2_3C 没提供访问器。
+ * 做法：给库 GxEPD2_3C.h 打了一个极小补丁（:677-682，已备份 .orig）：
+ * _black_buffer 声明前插入
+ *     #ifdef epd_panel_patched_public_buffer
+ *         epd_panel_patched_public_buffer      ← 本文件把它定义成 public:
+ *     #endif
+ * 库原生构建不定义该宏 → 零影响；只有本 .ino 定义宏后，黑缓冲在本
+ * 编译单元转公开。render_panel.cpp / api_panel.cpp 不含本宏，原样。
+ * ⚠ 宏必须在【首次】包含 GxEPD2_3C.h 之前定义（include guard 只会
+ *   展开一次），所以定义紧跟 U8g2 头之后——它是本项目唯一先于
+ *   GxEPD2_3C.h 的包含。库升级时若丢了补丁，下面 static_assert 会
+ *   编译失败提醒重打补丁。 */
+#define epd_panel_patched_public_buffer public:
+#include <GxEPD2_3C.h>
+#undef epd_panel_patched_public_buffer
+/* 补丁在位自检：能取 _black_buffer 的成员指针 = 补丁生效。
+ * （缺补丁时这行本身会报"xxx is private"，同样能拦住并指明原因） */
+typedef GxEPD2_3C<GxEPD2_750c_GDEY075Z08, GxEPD2_750c_GDEY075Z08::HEIGHT> PanelDisplay;
+typedef uint8_t BlackBuf[GxEPD2_750c_GDEY075Z08::WIDTH / 8 * GxEPD2_750c_GDEY075Z08::HEIGHT];
+static BlackBuf PanelDisplay::* const g_black_buffer_ptr = &PanelDisplay::_black_buffer;
+/* 供 renderCurrent 取当前帧黑缓冲 */
+static inline uint8_t* display_black_buffer(PanelDisplay& d) { return d.*g_black_buffer_ptr; }
 
 #include "fonts_ink.h"
 #include "panel_types.h"
@@ -95,27 +120,47 @@ static void renderCurrent() {
   } else {
     drawTimetable(g_panel.tt, g_panel);
   }
-  // ★ 落屏分叉（2026-10-29 快刷方案）：
-  //   g_hard_refresh=true  → 整刷。display(true) 走 writeImage 双色板
-  //     全帧写 RAM + _Update_Full()（~27s），清残影并把 old/new 两份
-  //     屏 RAM 都立为当前帧 = 差分基准重建。
-  //     ⚠ 不能用 display(false)！GxEPD2 的形参是 partial_update_mode，
-  //     false 反而走只写当前软件页的三色局刷（旧 bug 根源）。
-  //   g_hard_refresh=false → 黑白差分快刷 displayWindowBW(0,8,800,472)。
-  //     内部 writeImagePartToCurrent 整窗写新帧 → refresh_bw（OTP 差分
-  //     波形，标称 ~1.3s）→ writeImagePartToPrevious 回写旧帧 RAM，
-  //     差分基准自动滚动到当前帧。前提：画面全黑字（红色不参与差分），
-  //     render_panel.cpp 已无红色。
-  //   窗口取面板物理坐标（本类 _reverse=false，y 即 panel y）：
-  //   顶部 0..15 与底部 472..479 是 u8g2 字库 ascent/descent 永久留白
-  //   （任何模板任何字号都碰不到），排除在差分窗外可避免空白边缘闪灰。
+  // ★ 落屏分叉（2026-10-29 v2：手搓差分协议，修复整屏换代重叠）
+  //
+  //  v1 用 displayWindowBW(0,8,..) 出过重叠 bug：它只把"窗口内"回写
+  //  旧帧 RAM，且刷完要再传一遍整窗做回写——誊抄页→课程表页整屏换代
+  //  时旧帧 RAM 与屏面失步，差分把没更新的像素当"旧→新"再翻一次，
+  //  上一页文字叠在新页上（2026-10-29 照片实锤：下半屏干净、上半屏重叠）。
+  //
+  //  v2 直接走屏对象三层原语，全程 0x91 只出现在"写当前帧"一处，
+  //  旧帧 RAM 用 writeImageToPrevious **全屏无窗口**整帧写入（0x13 通道
+  //  =上一帧 black buffer），保证旧帧 RAM 与屏面永远严格同步：
+  //    ① writeImageToPrevious(g_prev_black) —— 旧帧 RAM ← 上一帧（全屏）
+  //    ② writeImageToCurrent(cur_black)     —— 当前帧 RAM ← 新帧（全屏）
+  //    ③ refresh_bw(0,0,800,480)            —— 差分刷新（实测 ~1.4s）
+  //    ④ memcpy(g_prev_black ← 当前黑缓冲)  —— 软件镜像滚动为下一帧的旧帧
+  //  注意不做 _PowerOff：差分波形依赖 charge balance 维持像素状态，
+  //  断电会破坏残余电荷平衡（残影加重）。
+  //
+  //  g_hard_refresh=true 时仍走 display(true) 整刷：writeImage 双色板
+  //  全帧写 RAM + _Update_Full（~21s），清残影并把两份 RAM 都立为当前帧。
+  //  ⚠ 不能 display(false)——那是只写当前软件页的三色局刷（旧 bug 根源）。
+  //  前提：画面全黑字（红色不参与差分），render_panel.cpp 已无红色。
   Serial.printf("[%6lu] 绘制完成, %s 开始\n", millis(),
                 g_hard_refresh ? "整刷" : "BW差分快刷");
-  if (g_hard_refresh) {
-    display.display(true);
-  } else {
-    display.setFullWindow();          // 渲染始终写全屏软件缓冲，与局窗协议无关
-    display.displayWindowBW(0, 8, PANEL_W, 472);
+  {
+    static uint8_t* g_prev_black = nullptr;   // 上一帧黑缓冲镜像（48KB）
+    const uint32_t BUF = (uint32_t)GxEPD2_750c_GDEY075Z08::WIDTH / 8 *
+                         GxEPD2_750c_GDEY075Z08::HEIGHT;
+    uint8_t* cur = display_black_buffer(display);
+    if (g_hard_refresh || !g_prev_black) {
+      if (!g_prev_black) g_prev_black = (uint8_t*)malloc(BUF);
+      display.display(true);                  // 整刷内部已把两份 RAM 立为当前帧
+      if (g_prev_black) memcpy(g_prev_black, cur, BUF);
+    } else {
+      display.epd2.writeImageToPrevious(g_prev_black, 0, 0,
+          GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
+      display.epd2.writeImageToCurrent(cur, 0, 0,
+          GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
+      display.epd2.refresh_bw(0, 0,
+          GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
+      memcpy(g_prev_black, cur, BUF);         // 差分基准滚动
+    }
   }
   Serial.printf("[%6lu] display 完成\n", millis());
   g_hard_refresh = false;
