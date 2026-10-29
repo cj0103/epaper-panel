@@ -153,13 +153,23 @@ static void renderCurrent() {
       display.display(true);                  // 整刷内部已把两份 RAM 立为当前帧
       if (g_prev_black) memcpy(g_prev_black, cur, BUF);
     } else {
-      display.epd2.writeImageToPrevious(g_prev_black, 0, 0,
-          GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
+      // ★ v3（2026-10-29 用户拍板"加重版刷白"）：差分前先来一遍
+      //   clear_full_bw（驱动本地补丁：寄存器 LUT，K→W 12 帧/W→W 8 帧）
+      //   整屏强制回白，残影电荷每次归零。
+      //   注意 clear_full_bw 会把两份屏 RAM 都写成全白（0xFF），随后
+      //   writeImageToPrevious 传全白 0xFF（= 清屏后的真实屏状态），
+      //   writeImageToCurrent 传新内容 → 差分为 白→新帧。
+      //   g_prev_black 仍滚动保存内容帧，供断电重启/切回整刷时快速重建。
+      // clear_full_bw 已把两份 RAM 写成全白；这里只需把"旧帧 RAM"
+      // 再刷成与清屏后屏面一致的全白（writeScreenBuffer 公开接口，
+      // 双 buffer 同写全白，等价于 _writeScreenBuffer(0x13, 0xFF)）
+      display.epd2.clear_full_bw();
+      display.epd2.writeScreenBuffer(0xFF, 0xFF);
       display.epd2.writeImageToCurrent(cur, 0, 0,
           GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
       display.epd2.refresh_bw(0, 0,
           GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
-      memcpy(g_prev_black, cur, BUF);         // 差分基准滚动
+      memcpy(g_prev_black, cur, BUF);         // 内容帧镜像滚动
     }
   }
   Serial.printf("[%6lu] display 完成\n", millis());
