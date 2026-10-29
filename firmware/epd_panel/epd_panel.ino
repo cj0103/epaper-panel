@@ -14,8 +14,11 @@
  * 设计（2026-10-24 与用户确认）：
  *   - 零公网依赖：删除 wttr/一言/60s新闻/NTP（内网时钟不可得，屏上不显示时间）
  *   - 内容通道：局域网 HTTP（/api/* + 手机主页），Flash(LittleFS) 断电保留
- *   - 刷新：内容变化才刷；上电首刷快刷（屏上原内容还在，不闪白），
- *     连续快刷每 4 次强制整刷清残影；手动 /api/mode=refresh 立即整刷
+ *   - 刷新（2026-10-29 定案）：内容变化才刷；上电首刷整刷建基准，
+ *     之后一律 UC8179 黑白差分快刷（画面全黑字是前提；含切模板——
+ *     差分按像素驱动，整屏换代同样快，残影由定期整刷压），
+ *     连续快刷每 FAST_EVERY 次强制整刷清残影；
+ *     手动 /api/mode=refresh 立即整刷
  *   - 字号三档 26/28/34 雅黑；誊抄默认 26px 可选，课程表固定 28px
  *   - 配网：EEPROM 存凭据；无配置开热点 EPD-Panel-Setup；/reset 逃生入口
  *
@@ -92,14 +95,28 @@ static void renderCurrent() {
   } else {
     drawTimetable(g_panel.tt, g_panel);
   }
-  // ★ GxEPD2 的 display(bool) 形参是 partial_update_mode，语义与 g_hard_refresh 相反：
-  //   true=局刷快刷（不清残影），false=_Update_Full() 整刷（清残影）。
-  //   （已核对库源码 GxEPD2_3C::display → epd2.refresh(partial_update_mode)）
-  //   注意 GxEPD2 的窗口机制：partial=true 时只把脏页（_current_page）重写到
-  //   RAM 再局刷；整刷路径才 flush 全部页。所以**全页面大改动（如整页换内容）
-  //   必须走整刷**，快刷只适用于翻页/局部变化的场景。
-  Serial.printf("[%6lu] 绘制完成, display(partial=%d) 开始\n", millis(), !g_hard_refresh);
-  display.display(!g_hard_refresh);
+  // ★ 落屏分叉（2026-10-29 快刷方案）：
+  //   g_hard_refresh=true  → 整刷。display(true) 走 writeImage 双色板
+  //     全帧写 RAM + _Update_Full()（~27s），清残影并把 old/new 两份
+  //     屏 RAM 都立为当前帧 = 差分基准重建。
+  //     ⚠ 不能用 display(false)！GxEPD2 的形参是 partial_update_mode，
+  //     false 反而走只写当前软件页的三色局刷（旧 bug 根源）。
+  //   g_hard_refresh=false → 黑白差分快刷 displayWindowBW(0,8,800,472)。
+  //     内部 writeImagePartToCurrent 整窗写新帧 → refresh_bw（OTP 差分
+  //     波形，标称 ~1.3s）→ writeImagePartToPrevious 回写旧帧 RAM，
+  //     差分基准自动滚动到当前帧。前提：画面全黑字（红色不参与差分），
+  //     render_panel.cpp 已无红色。
+  //   窗口取面板物理坐标（本类 _reverse=false，y 即 panel y）：
+  //   顶部 0..15 与底部 472..479 是 u8g2 字库 ascent/descent 永久留白
+  //   （任何模板任何字号都碰不到），排除在差分窗外可避免空白边缘闪灰。
+  Serial.printf("[%6lu] 绘制完成, %s 开始\n", millis(),
+                g_hard_refresh ? "整刷" : "BW差分快刷");
+  if (g_hard_refresh) {
+    display.display(true);
+  } else {
+    display.setFullWindow();          // 渲染始终写全屏软件缓冲，与局窗协议无关
+    display.displayWindowBW(0, 8, PANEL_W, 472);
+  }
   Serial.printf("[%6lu] display 完成\n", millis());
   g_hard_refresh = false;
   g_render_dirty = false;
@@ -216,9 +233,8 @@ void loop() {
   webServer.handleClient();
 
   if (!settingMode && g_render_dirty) {
-    // 本项目渲染一律整刷（requestRender 统一置 g_hard_refresh=true，
-    // 原因见 api_panel.cpp）。若将来重设计为 displayWindow 真局刷，
-    // 再在这里恢复"连续快刷 N 次强制整刷"的残影控制。
+    // 快刷/整刷的抉择已在 requestRender() 里按残影计数器定好
+    //（FAST_EVERY 次快刷插一次整刷，详见 api_panel.cpp）
     renderCurrent();
   }
   delay(50);

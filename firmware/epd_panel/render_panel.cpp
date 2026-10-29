@@ -246,12 +246,14 @@ void drawTimetable(const PanelTimetable& tt, PanelState& st) {
   drawTextAt((PANEL_W - textW(t, tpx)) / 2, titleBaseline, t, tpx);
   display.drawLine(margin, sepY, PANEL_W - margin, sepY, GxEPD_BLACK);
 
-  // 正文：天标题独占一行（红），段内容顶格排（可用满 16 列）
+  // 正文：天标题独占一行，段内容顶格排（可用满 16 列）
+  // ★ 2026-10-29 起一律黑色（含原红色天标题/标红行）：画面无红是
+  //   UC8179 黑白差分快刷（displayWindowBW）的前提。day_red/cell_red
+  //   数据模型保留，恢复彩色展示时只需还原此处配色并走整刷。
   setInkFont(msyh_28px);
   int y = firstLine;
   for (uint8_t d = d0; d <= d1; d++) {
     if (y > lastLine) break;
-    u8g2Fonts.setForegroundColor(GxEPD_RED);          // 天标题用红色
     drawTextAt(margin, y, tt.day_names[d], px);
     y += lineH;
     uint8_t sc = tt.seg_count[d] > 2 ? 2 : tt.seg_count[d];
@@ -261,7 +263,6 @@ void drawTimetable(const PanelTimetable& tt, PanelState& st) {
       uint8_t n = wrapSeg(segFull[d][s], maxCols, lines, 16);
       for (uint8_t i = 0; i < n; i++) {
         if (y > lastLine) break;                       // 防御：不画到页脚上
-        u8g2Fonts.setForegroundColor(tt.day_red[d] ? GxEPD_RED : GxEPD_BLACK);
         drawTextAt(margin, y, lines[i], px);
         y += lineH;
       }
@@ -501,8 +502,9 @@ void drawScribe(const PanelScribe& sc, PanelState& st) { drawScribeImpl(sc, st);
 
 void drawNotice(const String& text) {
   // 44px 档已随字库下线，公告用最大档 34px：13 字/行
+  // ★ 原红字改黑：全画面无红是黑白差分快刷的前提（2026-10-29）
   setInkFont(msyh_34px);
-  u8g2Fonts.setForegroundColor(GxEPD_RED);
+  u8g2Fonts.setForegroundColor(GxEPD_BLACK);
   u8g2Fonts.setBackgroundColor(GxEPD_WHITE);
   unsigned int n = utf8Chars(text);
   unsigned int lines = (n + 12) / 13;

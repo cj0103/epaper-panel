@@ -199,18 +199,36 @@ static void sendErr(const String& err) {
 volatile bool g_render_dirty = false;   // 需要全量重绘
 volatile bool g_hard_refresh = false;   // 本次要求整屏刷新（清残影）
 
-/* ★ 本项目渲染模式 = 每帧 fillScreen + 整屏重绘，永远不用 setWindow 局窗。
- * 这种模式下 GxEPD2 的快刷路径 display(true) 有致命短板（GxEPD2_BW.h:361）：
- * 它只把"当前页"（最后落笔所在的 60px 软件页）写入屏 RAM 就触发局刷，
- * 其余页不重写。翻页后新页内容若落在屏幕上半部（第 2 页正是如此），
- * 下半部未被重写，局刷把上一屏内容原样留在屏上——用户看到的
- * "第二页内容显示在屏幕下部"（2026-10-28 实机确认）。
- * 结论：一切渲染统一整刷。UC8179 的局刷物理耗时 ~18s 与整刷 27.5s 差距
- * 有限，且每次局刷后仍要定期整刷清残影，快刷已无收益。
- * 若将来要做真正的局部刷新（如只更新页码），须改为 displayWindow
- * 或 setWindow+nextPage 协议重设计渲染层。 */
+/* ★ 刷新策略（2026-10-29 快刷方案，替代 10-28 的"一律整刷"）：
+ *  - 上电首刷 / 手动 refresh / 定期消残影 → g_hard_refresh=true →
+ *    _Update_Full 整刷（~27s），同时把 old/new 两份屏 RAM 都写成当前帧，
+ *    建立干净的差分基准（见 epd_panel.ino renderCurrent）。
+ *  - 其余内容变化 → g_hard_refresh=false → displayWindowBW 黑白差分
+ *    快刷（UC8179 官方 OTP 差分波形，标称 ~1.3s）。
+ * 注意区分两条"局刷"路径：
+ *  1) GxEPD2 三色局刷 display(true)（_Update_Part）——物理 ~18s 不快，
+ *     且只把"当前软件页"写回屏 RAM（GxEPD2_BW.h:361），整屏重绘模式下
+ *     会把旧页残影留在屏上（2026-10-28 实机 bug）。已弃用。
+ *  2) 黑白差分 displayWindowBW → refresh_bw：自己 writeImagePartToCurrent
+ *     整窗写入 + 刷完回写 previous RAM 更新基准，协议完整。本方案用它。
+ * 前提：画面全部黑字（红色无法参与差分），render_panel.cpp 已去掉红色。
+ * 残影对策：连续快刷 FAST_EVERY 次在本文件强制插一次整刷。 */
 void requestRender() {
   g_render_dirty = false;   // 先清再置：重复置位不构成变化，loop 不会触发
+  static uint8_t fast_count = 0;
+  if (++fast_count >= FAST_EVERY) {  // 定期整刷清残影（含上电后第 N 次）
+    fast_count = 0;
+    g_hard_refresh = true;
+  } else {
+    g_hard_refresh = false;
+  }
+  g_render_dirty = true;
+}
+
+/* 强制整刷（手动 refresh / 切换模板模式）：整刷会把屏 RAM 的
+ * old/new 两份都重置为当前帧，差分基准随之重建。 */
+void requestFullRender() {
+  g_render_dirty = false;
   g_hard_refresh = true;
   g_render_dirty = true;
 }
@@ -296,7 +314,7 @@ void handleApiMode() {
   } else if (body == "refresh") {
     // 强制整刷：交给 loop 执行（不能在现场渲染——整刷 20+ 秒会把 HTTP
     // 响应堵死，客户端必然读超时，2026-10-28 实机发现）。
-    requestRender();
+    requestFullRender();
     sendOk(true);
     return;
   } else if (body == "next" || body == "prev") {
@@ -320,7 +338,8 @@ void handleApiMode() {
     return;
   }
   modeWrite(g_panel.mode);
-  requestRender();
+  requestRender();       // 切模板与翻页同理：整屏差异由差分波形逐像素驱动，
+                         // 残影交给 FAST_EVERY 定期整刷压（2026-10-29 实机取向）
   sendOk(true, "\"mode\":\"" + g_panel.mode + "\"");
 }
 

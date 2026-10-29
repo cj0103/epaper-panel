@@ -263,13 +263,15 @@ def render_timetable(days, title="四 1 班课程表（游泳周）", out="课�
     draw_text_at(cv, ftitle, (PANEL_W - text_w(title, tpx)) // 2, titleBaseline, title, tpx)
     cv.hline(margin, PANEL_W - margin, sepY)
 
-    # 正文：天标题独占一行（红），段内容顶格
+    # 正文：天标题独占一行，段内容顶格
+    # ★ 2026-10-29 起天标题不再标红：固件走 UC8179 黑白差分快刷，
+    #   画面必须全黑字（红色无法参与差分）。与 render_panel.cpp 同步。
     y = firstLine
     for d in range(d0, d1 + 1):
         if y > lastLine:
             break
         name, _ = days[d]
-        draw_text_at(cv, f28, margin, y, name, 28, red=True)
+        draw_text_at(cv, f28, margin, y, name, 28)
         y += lineH
         for ls in segs[d]:
             for ln in ls:
