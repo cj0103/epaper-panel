@@ -213,11 +213,16 @@ volatile bool g_hard_refresh = false;   // 本次要求整屏刷新（清残影�
  *     整窗写入 + 刷完回写 previous RAM 更新基准，协议完整。本方案用它。
  * 前提：画面全部黑字（红色无法参与差分），render_panel.cpp 已去掉红色。
  * 残影对策：连续快刷 FAST_EVERY 次在本文件强制插一次整刷。 */
+/* 残影计数器：文件级而不是函数内 static，供 fastRefreshCount() 查询
+ * （/api/status 上报"距下次整刷还有几次"，投喂页可见）。 */
+static uint8_t g_fast_count = 0;
+
+unsigned int fastRefreshCount() { return g_fast_count; }
+
 void requestRender() {
   g_render_dirty = false;   // 先清再置：重复置位不构成变化，loop 不会触发
-  static uint8_t fast_count = 0;
-  if (++fast_count >= FAST_EVERY) {  // 定期整刷清残影（含上电后第 N 次）
-    fast_count = 0;
+  if (++g_fast_count >= FAST_EVERY) {  // 定期整刷清残影（含上电后第 N 次）
+    g_fast_count = 0;
     g_hard_refresh = true;
   } else {
     g_hard_refresh = false;
@@ -229,6 +234,7 @@ void requestRender() {
  * old/new 两份都重置为当前帧，差分基准随之重建。 */
 void requestFullRender() {
   g_render_dirty = false;
+  g_fast_count = 0;         // 手动整刷同时重置残影计数器
   g_hard_refresh = true;
   g_render_dirty = true;
 }
@@ -369,6 +375,9 @@ void handleApiStatus() {
   s += "\"";
   s += ",\"ip\":\"" + WiFi.localIP().toString() + "\"";
   s += ",\"free_heap\":" + String(ESP.getFreeHeap());
+  // 刷新调度透明度：距下一次自动整刷（清残影）还需几次快刷
+  s += ",\"fast_count\":" + String(g_fast_count);
+  s += ",\"full_in\":" + String(FAST_EVERY > g_fast_count ? FAST_EVERY - g_fast_count : 0);
   s += "}";
   webServer.send(200, "application/json; charset=utf-8", s);
 }
