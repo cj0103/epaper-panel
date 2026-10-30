@@ -130,12 +130,31 @@ static void renderCurrent() {
   //  v2 直接走屏对象三层原语，全程 0x91 只出现在"写当前帧"一处，
   //  旧帧 RAM 用 writeImageToPrevious **全屏无窗口**整帧写入（0x13 通道
   //  =上一帧 black buffer），保证旧帧 RAM 与屏面永远严格同步：
-  //    ① writeImageToPrevious(g_prev_black) —— 旧帧 RAM ← 上一帧（全屏）
-  //    ② writeImageToCurrent(cur_black)     —— 当前帧 RAM ← 新帧（全屏）
+  //    ① writeImageToPrevious(g_prev_black) —— 黑缓冲RAM(0x10) ← 上一帧（全屏）
+  //    ② writeImageToCurrent(cur_black)     —— 红缓冲RAM(0x13) ← 新帧（全屏）
   //    ③ refresh_bw(0,0,800,480)            —— 差分刷新（实测 ~1.4s）
   //    ④ memcpy(g_prev_black ← 当前黑缓冲)  —— 软件镜像滚动为下一帧的旧帧
+  //    ⚠ 0x10/0x13 在本驱动里叫 "previous/current"，但差分 LUT 的 K→W
+  //    走 0x10、W→K 走 0x13——即 0x10=屏面镜像、0x13=目标内容（v2 实机验证）。
   //  注意不做 _PowerOff：差分波形依赖 charge balance 维持像素状态，
   //  断电会破坏残余电荷平衡（残影加重）。
+  //
+  //  ★ v3/v3.1 前置刷白方案已彻底废弃（clear_full_bw 已从驱动移除）。
+  //
+  //  ★★ 2026-10-30 "怎么刷都叠字" 根因定案（代码审查，非猜测）：
+  //  UC8179 的 partial-in（0x91）是"粘的"——置位后所有 RAM 写入
+  //  （0x10/0x13）都被裁进最近一次 0x90 partial window，直到 0x92。
+  //  官方驱动两条写入路径不负责闭合：_writeScreenBuffer 的 0x91/0x92
+  //  双双注释（:53/:62）；display(true) 整刷走 writeImage(black,color)
+  //  连写两笔（0x10 后紧跟 0x13），第二笔带着第一笔遗留的窗口状态写
+  //  "previous"侧 RAM。任何残留窗口 → 全屏写被裁 → 屏 RAM 与软件
+  //  镜像失步 → 差分每刷在旧内容上叠新内容，整刷亦救不回基准。
+  //  修复＝驱动补丁（tools/patch_driver_reentry.py，幂等）：
+  //   a) _writeScreenBuffer 进入先 0x92 partial out；
+  //   b) writeImageToPrevious 追加一次全屏自闭合(0x91+全屏0x90+0x13+
+  //      0x92)回写——把"previous RAM=上一帧"这一差分基准强制立正。
+  //  ⚠ 排除了"刷新频率过高"猜想：loop 串行渲染，每次刷屏都等 BUSY
+  //  结束才返回，HTTP 并发请求只是置脏标志、不会打断刷屏。
   //
   //  g_hard_refresh=true 时仍走 display(true) 整刷：writeImage 双色板
   //  全帧写 RAM + _Update_Full（~21s），清残影并把两份 RAM 都立为当前帧。
@@ -153,23 +172,15 @@ static void renderCurrent() {
       display.display(true);                  // 整刷内部已把两份 RAM 立为当前帧
       if (g_prev_black) memcpy(g_prev_black, cur, BUF);
     } else {
-      // ★ v3.1（修复 v3 叠字回归）：前置加重刷白 + 差分，顺序不可乱。
-      //   v3 翻车复盘：清屏后调了 writeScreenBuffer(0xFF,0xFF)——它把
-      //   两份 RAM 一起刷白，刚写进"新帧 RAM"的内容被抹掉，差分变成
-      //   白→白（啥也不驱动），随后内容只写进了"旧帧 RAM"（语义反了）
-      //   → 用户所见：没刷白、直接叠字（2026-10-29 实机）。
-      //   正确顺序（clear_full_bw 内部已把两份 RAM 写全白并完成刷白）：
-      //    a) 旧帧 RAM ← 全白：clear_full_bw 已经写了，**不再做任何
-      //       全屏覆写**（v3 的教训：任何"顺手清一下"都会毁掉基准）；
-      //    b) 新帧 RAM ← 当前内容（writeImageToCurrent，只动 0x10）；
-      //    c) refresh_bw 差分：白→内容；
-      //    d) 镜像滚动仅供断电重启后重建，不参与差分链。
-      display.epd2.clear_full_bw();
+      // v2 差分链（实机验证稳定）：old(0x10) → new(0x13) → 差分刷。
+      // 任何"顺手全屏覆写"都会毁掉 0x10 屏面镜像基准（v3 的教训）。
+      display.epd2.writeImageToPrevious(g_prev_black, 0, 0,
+          GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
       display.epd2.writeImageToCurrent(cur, 0, 0,
           GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
       display.epd2.refresh_bw(0, 0,
           GxEPD2_750c_GDEY075Z08::WIDTH, GxEPD2_750c_GDEY075Z08::HEIGHT);
-      memcpy(g_prev_black, cur, BUF);         // 内容帧镜像滚动
+      memcpy(g_prev_black, cur, BUF);         // 镜像滚动为下一帧的旧帧
     }
   }
   Serial.printf("[%6lu] display 完成\n", millis());

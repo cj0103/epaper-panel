@@ -15,7 +15,7 @@ extern volatile bool g_hard_refresh;
  * 10→6：2026-10-29 实机照片评估，10 次窗口内"脏底"累积肉眼可见。
  * 6→12：v3 起每次快刷前置 clear_full_bw 加重刷白（残影每轮归零），
  * 长整刷退化为防 v1 类失步事故的保险，放宽到 12 摊薄成本。 */
-#define FAST_EVERY 12
+#define FAST_EVERY 6
 
 /* 统一渲染请求：先清待办再置位；按残影计数器决定本次快刷还是整刷
  * （刷新策略详见 api_panel.cpp 注释）。
