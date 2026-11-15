@@ -55,34 +55,54 @@ def get_font(px):
     return _FONTS[px]
 
 
+def descender_need(px):
+    """g/j 类降部需要基线下留的像素数（向上取整，微软雅黑 desc≈0.243em，
+    取 0.20em 够用：26px→6，28px→6，34px→7）。"""
+    return int(0.20 * px + 0.999)
+
+
 def render_glyph(ch, px, font=None, threshold=None):
-    """渲染单个字符为 px×px 二值点阵（0/1 的 list[list[int]]）。
-    空白字符返回 None（不入字库，渲染层按字号步进补位）。"""
+    """渲染单个字符，返回 rows（0/1 点阵，行数 = px + EXTRA 常量）。
+
+    【2026-11-15 修复】原实现把字形裁进 px×px 方框：微软雅黑 g/j 的下钩
+    基线下要 6~7px，方框在基线下只留 ~5px —— 下钩在**字库生成阶段**就
+    被裁掉（实机：誊抄 kg 的 g 显示成 ka，字库头 descent_g=-2 实锤）。
+    现在整档统一行高 px+EXTRA（EXTRA 由 write_bdf 按 descender_need 算、
+    经全局传入），anchor="mm" 几何不变 → 基线在行内绝对位置不变，多出的
+    行全部落在行底：正常字形 BBX 与旧版一致，只有降部深的字墨迹变完整。
+    advance 宽度仍 = px（等宽、列几何完全不变）。
+    空白字符返回 None（不入字库）。"""
     font = font or get_font(px)
     thr = THRESHOLD if threshold is None else threshold
     scale = SUPERSAMPLE
     big = px * scale
     pad = 6 * scale
+    cell_h = px + EXTRA
     img = Image.new("L", (big + 2 * pad, big + 2 * pad), 0)
     d = ImageDraw.Draw(img)
     # anchor="mm" 以画布中心对中 → 字形落在整格中央
     d.text((pad + big // 2, pad + big // 2), ch, fill=255, font=font, anchor="mm")
     img = img.resize(((big + 2 * pad) // scale, (big + 2 * pad) // scale),
                      Image.LANCZOS)
+    # 宽仍取 px（等宽 advance 不变）；高取 px+EXTRA（多出的行在行底）
     img = img.crop((pad // scale, pad // scale,
-                    pad // scale + px, pad // scale + px))
+                    pad // scale + px, pad // scale + cell_h))
     data = img.load()
     rows = [[1 if data[x, y] > thr else 0 for x in range(px)]
-            for y in range(px)]
+            for y in range(cell_h)]
     if not any(any(r) for r in rows):
         return None
     return rows
 
 
-def _bbox(rows, px):
-    """ink 包围盒：top/bottom 行、left/right 列、全墨与否"""
-    ys = [y for y in range(px) if any(rows[y][x] for x in range(px))]
-    xs = [x for y in range(px) for x in range(px) if rows[y][x]]
+# 本档行高扩展量（write_bdf 每次生成前设置；render_glyph/baseline_row 共用）
+EXTRA = 0
+
+
+def _bbox(rows, w, h):
+    """ink 包围盒：top/bottom 行、left/right 列"""
+    ys = [y for y in range(h) if any(rows[y][x] for x in range(w))]
+    xs = [x for y in range(h) for x in range(w) if rows[y][x]]
     if not ys:
         return None
     return ys[0], ys[-1], min(xs), max(xs)
@@ -133,7 +153,10 @@ def _hex_rows(rows, w, x0):
 def write_bdf(path, chars, px, font=None, threshold=None):
     """生成 BDF 文件。chars：待收录字符列表（str 元素）。
     返回 (收录数, 跳过数)。"""
+    global EXTRA
     font = font or get_font(px)
+    # 本档统一行高扩展：给 g/j/p/q/y 的降部留足基线以下的空间
+    EXTRA = descender_need(px)
     base = int(round(baseline_row(px, font)))
     glyphs = []
     skipped = 0
@@ -142,7 +165,7 @@ def write_bdf(path, chars, px, font=None, threshold=None):
         if rows is None:
             skipped += 1
             continue
-        bb = _bbox(rows, px)
+        bb = _bbox(rows, px, px + EXTRA)
         if bb is None:
             skipped += 1
             continue

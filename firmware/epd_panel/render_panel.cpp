@@ -323,8 +323,12 @@ static unsigned int scribeGrid(const PanelScribe& sc, uint8_t& cols, uint8_t& ro
   int availW = PANEL_W - 24;
   int availH = PANEL_H - topH - footH;
   cols = max(1, availW / px);
-  rows = max(1, availH / px);
-  cell = px;
+  // ★ 2026-11-15 字库降部修复配套：字库行高从 px 扩为 px+EXTRA(6)
+  //   （g/j/p/q/y 下钩曾在字库生成端被 px×px 裁掉，descent_g=-2 实锤）。
+  //   格高 = px+6 与字库行高严格一致 → 基线 = by+cell-6 即字库基线，
+  //   行网格与字库几何严丝合缝。advance 宽度不变（列网格不受影响）。
+  cell = px + 6;
+  rows = max(1, availH / cell);
   gx = (PANEL_W - cols * cell) / 2;
   gy = topH;                            // 顶格排版（不再垂直居中，避免顶部空一大块）
   return (unsigned int)cols * rows;
@@ -485,11 +489,9 @@ static void drawScribeImpl(const PanelScribe& sc, PanelState& st) {
       String ch(sc.text.c_str() + cst, cln);
       if (ch == " " || ch == "\n" || ch == "\r") continue;
       int cx = gx + (int)(ci - from) * cell;
-      // ★ 基线 = 格底上 9px（2026-11-15 修复）：原 cell-6 给 descender
-      //   的余量不足——雅黑 26px 的 g/j 降部深 7~8px，越出基线后被
-      //   下一行字符的白底矩形擦掉（实机：kg 的 g 下钩全被切平）。
-      //   9px 覆盖 j 的最深降部；g 下钩探入下一格 ~2px 属可接受侵入。
-      u8g2Fonts.setCursor(cx + (cell - pxs) / 2, by + cell - 9);
+      // 基线 = 格底上 6px（= 字库基线位：cell 严格取 px+EXTRA(6)，
+      // 2026-11-15 字库降部修复配套；行网格与字库几何一一对应）。
+      u8g2Fonts.setCursor(cx + (cell - pxs) / 2, by + cell - 6);
       u8g2Fonts.print(ch);
     }
   }
