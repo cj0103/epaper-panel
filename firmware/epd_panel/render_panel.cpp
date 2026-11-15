@@ -314,24 +314,27 @@ static int scribeSetBodyFont(const String& font) {
   return px;
 }
 
-/* 计算稿纸网格：返回每页字符数，输出 cols/rows/pageText 上限 */
+/* 计算稿纸网格：返回每页字符数，输出 cols/rows/pageText 上限。
+ * 几何定案（2026-11-15）：列方向唯一权威 = px（字宽 advance==px==步进）；
+ * 行方向唯一权威 = lineH = px+4（墨迹带不交叠的最小安全行距，见下）。
+ * cell 为格宽（=px），行距由 lineH 单独输出——曾把二者混为一谈：
+ * 用 px 算列却用 px+6 步进 → 每行左溢（首字裁半）；行距直接用 px+6
+ * → 行距虚大 6px、每页少一行。 */
 static unsigned int scribeGrid(const PanelScribe& sc, uint8_t& cols, uint8_t& rows,
-                               int& gx, int& gy, int& cell) {
+                               int& gx, int& gy, int& cell, int& lineH) {
   int px = scribePx(sc.font);
   int footH = 44;                       // 页脚
   int topH = 22;                        // 顶部留白：标题紧贴上沿
   int availW = PANEL_W - 24;
   int availH = PANEL_H - topH - footH;
-  // ★ 2026-11-15（第二处几何 bug，实机每行左溢一格）：字库降部修复把
-  //   cell 扩为 px+6 后，列几何忘了配套——cols 仍按 px 算（28px→16 列），
-  //   但绘制步进 cx = gx + i*cell（34px）→ 16 格需 544px > 480px 屏宽；
-  //   gx 居中同为负值（(480-544)/2 = -32）→ 每行整体左溢 64px，
-  //   第 0 格画在 x=-6（首字符左半被裁似"吞字"）、右缘同样被裁。
-  //   正解：列、格、居中三处统一用 cell（cell 为格宽的唯一权威）。
-  cell = px + 6;                        // 格高=字库行高（px+EXTRA6，降部修复配套）
-  cols = max(1, availW / cell);         // 15 列@28px、15@26px、12@34px
-  rows = max(1, availH / cell);
-  gx = (PANEL_W - cols * cell) / 2;     // 恒 ≥0
+  cell = px;                            // 格宽=字宽=步进（列几何）
+  cols = max(1, availW / cell);         // 17 列@26px、16 列@28px、13 列@34px
+  gx = (PANEL_W - cols * cell) / 2;     // 恒 ≥0（左溢 bug 的根治点）
+  // 行距 = px+4：字库行高虽为 px+6（g 下钩占位），但下移字形墨迹底缘
+  // 实测仅基线下 3~4px——前行墨迹带 [基线-25, 基线+4) 与后行起点
+  // [基线+4, …) 零交叠，透明模式下互不切字；比 px+6 每页多 1 行。
+  lineH = px + 4;
+  rows = max(1, availH / lineH);
   gy = topH;                            // 顶格排版（不再垂直居中，避免顶部空一大块）
   return (unsigned int)cols * rows;
 }
@@ -418,13 +421,29 @@ static uint16_t scribeBuildRows(const PanelScribe& sc, uint8_t cols) {
       // 学生会误读成两道题（2026-11-15 实机照片）。
       // 退无可退（整行无空格）则不防，硬切兜底。
       if (col > 0 && ci > 0 && (cp == ' ' || isalnumCP(cp))) {
+        // 从行尾找"单词起点"（空格之后的第一个非空格）；空格本身可留行尾。
         unsigned int cut = ci;
         unsigned int cst, cln;
         bool hasSpace = false;
         while (cut > s_scribeRow[row] + 1) {
           utf8Nth(sc.text, cut - 1, cst, cln);
           uint32_t lcp = utf8Code(sc.text, cst, cln);
-          if (lcp == ' ') { hasSpace = true; break; }
+          if (lcp == ' ') {
+            // cut-1 = 空格位；单词从 cut 起。把"空格+单词"整体挪走时，
+            // 空格允许留在旧行尾 → 行起点 = 单词起点（cut）。
+            // 但若 [cut, ci) 已含禁则标点（如 ")t"），整词挪行后新行以
+            // ')' 开头 → 违反行首禁则，放弃防切（让禁则分支处理）。
+            unsigned int bck = cut;
+            bool unsafe = false;
+            while (bck < ci) {
+              unsigned int t2, l2;
+              utf8Nth(sc.text, bck, t2, l2);
+              if (isNoLineStart(utf8Code(sc.text, t2, l2))) { unsafe = true; break; }
+              bck++;
+            }
+            if (unsafe) { hasSpace = false; break; }
+            hasSpace = true; break;
+          }
           cut--;
         }
         if (hasSpace) {
@@ -461,8 +480,8 @@ static uint8_t scribeHeaderLines(const PanelScribe& sc, uint8_t cols) {
 
 unsigned int scribeTotalPages(const PanelScribe& sc) {
   uint8_t cols, rows;
-  int gx, gy, cell;
-  scribeGrid(sc, cols, rows, gx, gy, cell);
+  int gx, gy, cell, lineH;
+  scribeGrid(sc, cols, rows, gx, gy, cell, lineH);
   uint16_t bodyRows = scribeBuildRows(sc, cols);
   uint8_t headerLines = scribeHeaderLines(sc, cols);
   unsigned int firstPageRows = (headerLines && headerLines < rows) ? (rows - headerLines) : rows;
@@ -472,8 +491,8 @@ unsigned int scribeTotalPages(const PanelScribe& sc) {
 
 static void drawScribeImpl(const PanelScribe& sc, PanelState& st) {
   uint8_t cols, rows;
-  int gx, gy, cell;
-  scribeGrid(sc, cols, rows, gx, gy, cell);
+  int gx, gy, cell, lineH;
+  scribeGrid(sc, cols, rows, gx, gy, cell, lineH);
   uint16_t bodyRows = scribeBuildRows(sc, cols);
   bool hasHeader = sc.title.length() > 0;
   uint8_t headerLines = scribeHeaderLines(sc, cols);
@@ -522,7 +541,7 @@ static void drawScribeImpl(const PanelScribe& sc, PanelState& st) {
     //   （曾用 gridRow=r 直接拿全局行号，第2页 by=22+27*26=724，
     //   内容全被推到屏幕底部、上部大片空白——2026-10-28 实机确认）
     int gridRow = (int)(r - r0) + ((page == 0) ? (int)headerLines : 0);
-    int by = gy + gridRow * cell;
+    int by = gy + gridRow * lineH;
     unsigned int from = s_scribeRow[r], to = s_scribeRow[r + 1];
     for (unsigned int ci = from; ci < to; ci++) {
       unsigned int cst, cln;
@@ -530,9 +549,10 @@ static void drawScribeImpl(const PanelScribe& sc, PanelState& st) {
       String ch(sc.text.c_str() + cst, cln);
       if (ch == " " || ch == "\n" || ch == "\r") continue;
       int cx = gx + (int)(ci - from) * cell;
-      // 基线 = 格底上 6px（= 字库基线位：cell 严格取 px+EXTRA(6)，
-      // 2026-11-15 字库降部修复配套；行网格与字库几何一一对应）。
-      u8g2Fonts.setCursor(cx + (cell - pxs) / 2, by + cell - 6);
+      // 基线 = 行顶 + px/2：行距 lineH=px+4 内垂直居中（上下各 2px 富余），
+      // 前行墨迹带 [基线-22, 基线+4]、后行 [基线+8, 基线+30] 零交叠，
+      // g 下钩不被切、行间比 px+6 时代每页多 1 行（2026-11-15 定案）。
+      u8g2Fonts.setCursor(cx + (cell - pxs) / 2, by + pxs / 2);
       u8g2Fonts.print(ch);
     }
   }
