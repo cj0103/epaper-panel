@@ -386,18 +386,30 @@ static uint16_t scribeBuildRows(const PanelScribe& sc, uint8_t cols) {
     unsigned int st, ln;
     utf8Nth(sc.text, ci, st, ln);
     uint32_t cp = utf8Code(sc.text, st, ln);
-    if (cp == '\r') { ci++; continue; }               // 忽略回车
-    if (cp == '\n') {                                // 段落换行：结束本行
-      ci++; row++;
-      s_scribeRow[row] = (uint16_t)ci;
-      col = 0;
+    if (cp == '\n' || cp == '\r') {                  // 段落换行：换行符归当前行
+      ci++; row++;                                   //   （'\r' 不再"忽略"——
+      s_scribeRow[row] = (uint16_t)ci;               //    原忽略法使 \r\n 计成 2 行，
+      col = 0;                                       //    虚增行数吃掉页尾行）
       continue;
     }
     if (col >= cols) {                              // 行满
       if (col > 0 && ci > 0 && isNoLineStart(cp)) {
-        ci--;                                        // 禁则：把上一字挤到下一行
+        // 禁则：把上一行最后一个字挤到下一行行首（追い出し）。
+        // ★ 2026-11-15 修复：原实现 `ci--` 后被 s_scribeRow[row]=ci+1
+        //   跳过——被挤的那个字两头不靠，**凭空消失**（实机：每行
+        //   行首一格空白，如 2600g→600g、450000mL→50000mL）。
+        //   正确：行尾退到"最后一个非空格字符"的下一位——被挤字归入
+        //   新行开头，且行尾空格一并挤走（空格不落行尾）。
+        unsigned int cut = ci;
+        unsigned int cst, cln;
+        while (cut > s_scribeRow[row]) {
+          utf8Nth(sc.text, cut - 1, cst, cln);
+          if (utf8Code(sc.text, cst, cln) != ' ') break;
+          cut--;
+        }
+        if (cut == s_scribeRow[row]) cut = ci - 1;   // 整行都是空格：硬挤防死循环
         row++;
-        s_scribeRow[row] = (uint16_t)ci;
+        s_scribeRow[row] = (uint16_t)cut;
         col = 0;
         continue;
       }
