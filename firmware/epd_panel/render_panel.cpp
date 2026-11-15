@@ -304,6 +304,11 @@ static int scribeSetBodyFont(const String& font) {
   int px = scribePx(font);
   setInkFont(scribeFontPtr(font));
   u8g2Fonts.setFontMode(1);              // 强制透明（不依赖 setFont 是否真正切换）
+  // ★ 2026-11-15（g 下钩被切修复·二）：字体桥接层的 fg/bg 是全局状态，
+  //   每次进入誊抄必须显式钉死（其他模板可能改过）；配合上方
+  //   setFontMode(1) 透明模式，绘制只落前景墨、背景色不参与——
+  //   逐行按"行序"绘制时，后行字符不会再擦掉前行 g/j 探出基线的
+  //   下伸墨迹（原 bug：基线仅留 6px，降部越线后被后行覆盖）。
   u8g2Fonts.setForegroundColor(GxEPD_BLACK);
   u8g2Fonts.setBackgroundColor(GxEPD_WHITE);
   return px;
@@ -480,7 +485,11 @@ static void drawScribeImpl(const PanelScribe& sc, PanelState& st) {
       String ch(sc.text.c_str() + cst, cln);
       if (ch == " " || ch == "\n" || ch == "\r") continue;
       int cx = gx + (int)(ci - from) * cell;
-      u8g2Fonts.setCursor(cx + (cell - pxs) / 2, by + cell - 6);
+      // ★ 基线 = 格底上 9px（2026-11-15 修复）：原 cell-6 给 descender
+      //   的余量不足——雅黑 26px 的 g/j 降部深 7~8px，越出基线后被
+      //   下一行字符的白底矩形擦掉（实机：kg 的 g 下钩全被切平）。
+      //   9px 覆盖 j 的最深降部；g 下钩探入下一格 ~2px 属可接受侵入。
+      u8g2Fonts.setCursor(cx + (cell - pxs) / 2, by + cell - 9);
       u8g2Fonts.print(ch);
     }
   }
