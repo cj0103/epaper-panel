@@ -322,14 +322,16 @@ static unsigned int scribeGrid(const PanelScribe& sc, uint8_t& cols, uint8_t& ro
   int topH = 22;                        // 顶部留白：标题紧贴上沿
   int availW = PANEL_W - 24;
   int availH = PANEL_H - topH - footH;
-  cols = max(1, availW / px);
-  // ★ 2026-11-15 字库降部修复配套：字库行高从 px 扩为 px+EXTRA(6)
-  //   （g/j/p/q/y 下钩曾在字库生成端被 px×px 裁掉，descent_g=-2 实锤）。
-  //   格高 = px+6 与字库行高严格一致 → 基线 = by+cell-6 即字库基线，
-  //   行网格与字库几何严丝合缝。advance 宽度不变（列网格不受影响）。
-  cell = px + 6;
+  // ★ 2026-11-15（第二处几何 bug，实机每行左溢一格）：字库降部修复把
+  //   cell 扩为 px+6 后，列几何忘了配套——cols 仍按 px 算（28px→16 列），
+  //   但绘制步进 cx = gx + i*cell（34px）→ 16 格需 544px > 480px 屏宽；
+  //   gx 居中同为负值（(480-544)/2 = -32）→ 每行整体左溢 64px，
+  //   第 0 格画在 x=-6（首字符左半被裁似"吞字"）、右缘同样被裁。
+  //   正解：列、格、居中三处统一用 cell（cell 为格宽的唯一权威）。
+  cell = px + 6;                        // 格高=字库行高（px+EXTRA6，降部修复配套）
+  cols = max(1, availW / cell);         // 15 列@28px、15@26px、12@34px
   rows = max(1, availH / cell);
-  gx = (PANEL_W - cols * cell) / 2;
+  gx = (PANEL_W - cols * cell) / 2;     // 恒 ≥0
   gy = topH;                            // 顶格排版（不再垂直居中，避免顶部空一大块）
   return (unsigned int)cols * rows;
 }
@@ -362,6 +364,12 @@ static bool isNoLineStart(uint32_t cp) {
   return false;
 }
 
+/* ASCII 字母/数字（誊抄正文以单位换算/数字题为主，单词防切只认 ASCII；
+ * CJK 每字可断，无需参与） */
+static bool isalnumCP(uint32_t cp) {
+  return (cp >= '0' && cp <= '9') || (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z');
+}
+
 /* 取 UTF-8 字符的码点 */
 static uint32_t utf8Code(const String& s, unsigned int start, unsigned int len) {
   uint32_t c = (unsigned char)s[start];
@@ -374,7 +382,8 @@ static uint32_t utf8Code(const String& s, unsigned int start, unsigned int len) 
 }
 
 /* 切行：返回行数。s_scribeRow[i] = 第 i 行起始字符下标；
- * s_scribeRow[行数] = 总字符数（结束标记）。 */
+ * s_scribeRow[行数] = 结束标记（总字符数；若末字符是 '\n' 则为 total-1，
+ * 排除"文末换行独占一行"——它是行终止符不是正文，画出来是页底空行）。 */
 static uint16_t scribeBuildRows(const PanelScribe& sc, uint8_t cols) {
   unsigned int total = utf8Chars(sc.text);
   uint16_t row = 0;                 // ★ 必须 16 位：28px 档正文超 4080 汉字时
@@ -393,25 +402,37 @@ static uint16_t scribeBuildRows(const PanelScribe& sc, uint8_t cols) {
       continue;
     }
     if (col >= cols) {                              // 行满
+      // 禁则：行首不能是标点。把行尾的空格连同标点一起挪到新行
+      // 行首（追い出し，空格照画、只是挪位）。
+      // ★ 2026-11-15 修复：原实现 `ci--` 后被 s_scribeRow[row]=ci+1
+      //   跳过——被挤的那个字两头不靠，**凭空消失**（实机：每行
+      //   行首一格空白，如 2600g→600g、450000mL→50000mL）。
       if (col > 0 && ci > 0 && isNoLineStart(cp)) {
-        // 禁则：把上一行最后一个字挤到下一行行首（追い出し）。
-        // ★ 2026-11-15 修复：原实现 `ci--` 后被 s_scribeRow[row]=ci+1
-        //   跳过——被挤的那个字两头不靠，**凭空消失**（实机：每行
-        //   行首一格空白，如 2600g→600g、450000mL→50000mL）。
-        //   正确：行尾退到"最后一个非空格字符"的下一位——被挤字归入
-        //   新行开头，且行尾空格一并挤走（空格不落行尾）。
-        unsigned int cut = ci;
-        unsigned int cst, cln;
-        while (cut > s_scribeRow[row]) {
-          utf8Nth(sc.text, cut - 1, cst, cln);
-          if (utf8Code(sc.text, cst, cln) != ' ') break;
-          cut--;
-        }
-        if (cut == s_scribeRow[row]) cut = ci - 1;   // 整行都是空格：硬挤防死循环
         row++;
-        s_scribeRow[row] = (uint16_t)cut;
+        s_scribeRow[row] = (uint16_t)ci;
         col = 0;
         continue;
+      }
+      // 西文单词防切：行尾是"单词中间"（下一字符仍是字母/数字）时，
+      // 退到行内最后一个空格整词挪行——否则 450000mL 被切成 450000/mL，
+      // 学生会误读成两道题（2026-11-15 实机照片）。
+      // 退无可退（整行无空格）则不防，硬切兜底。
+      if (col > 0 && ci > 0 && (cp == ' ' || isalnumCP(cp))) {
+        unsigned int cut = ci;
+        unsigned int cst, cln;
+        bool hasSpace = false;
+        while (cut > s_scribeRow[row] + 1) {
+          utf8Nth(sc.text, cut - 1, cst, cln);
+          uint32_t lcp = utf8Code(sc.text, cst, cln);
+          if (lcp == ' ') { hasSpace = true; break; }
+          cut--;
+        }
+        if (hasSpace) {
+          row++;
+          s_scribeRow[row] = (uint16_t)cut;   // 空格留旧行尾，单词整体入新行
+          col = 0;
+          continue;
+        }
       }
       row++;
       s_scribeRow[row] = (uint16_t)ci;
@@ -420,6 +441,14 @@ static uint16_t scribeBuildRows(const PanelScribe& sc, uint8_t cols) {
     ci++; col++;
   }
   s_scribeRow[row + 1] = (uint16_t)total;
+  // 文末换行不独占一行（见函数头注释）：末行内容为空且其起点是文末 '\n'
+  // （起点==total 时向前看一字符）→ 收缩为"上行含文末换行"。
+  if (s_scribeRow[row] == total && total > 0) {
+    unsigned int st, ln;
+    utf8Nth(sc.text, total - 1, st, ln);
+    uint32_t lcp = utf8Code(sc.text, st, ln);
+    if (lcp == '\n' || lcp == '\r') s_scribeRow[row] = (uint16_t)(total - 1);
+  }
   return row + 1;
 }
 
